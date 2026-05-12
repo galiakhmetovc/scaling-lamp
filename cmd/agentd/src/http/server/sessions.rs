@@ -9,13 +9,15 @@ use crate::http::types::{
     SessionRunStatusResponse, SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
     SessionTaskResponse, SessionTasksResponse, SessionTranscriptResponse,
     SessionWorkspaceEntryResponse, SessionWorkspaceFileResponse, SessionWorkspaceListResponse,
-    SkillCommandRequest, TaskControlResponse, TaskRenderResponse,
+    SessionWorkspaceMkdirResponse, SessionWorkspacePathRequest, SessionWorkspaceTrashResponse,
+    SessionWorkspaceWriteRequest, SessionWorkspaceWriteResponse, SkillCommandRequest,
+    TaskControlResponse, TaskRenderResponse,
 };
 use agent_persistence::{AgentRepository, ArtifactRepository, SessionRepository};
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
 };
-use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
+use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef, WriteMode};
 use std::collections::BTreeMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -297,6 +299,21 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
             if workspace == "workspace" && action == "download" =>
         {
             handle_workspace_download(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, workspace, action])
+            if workspace == "workspace" && action == "write" =>
+        {
+            handle_workspace_write(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, workspace, action])
+            if workspace == "workspace" && action == "mkdir" =>
+        {
+            handle_workspace_mkdir(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, workspace, action])
+            if workspace == "workspace" && action == "trash" =>
+        {
+            handle_workspace_trash(app, request, session_id.as_str())
         }
         (Method::Get, [session_id, plan]) if plan == "plan" => {
             handle_render_plan(app, request, session_id.as_str())
@@ -771,6 +788,151 @@ fn handle_workspace_download(app: &App, request: Request, session_id: &str) -> s
             Err((status, payload)) => respond_json(request, status, &payload),
         },
         Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_write(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let body = match parse_json_body::<SessionWorkspaceWriteRequest>(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid workspace write request: {error}"),
+                },
+            );
+        }
+    };
+    let mode = match workspace_write_mode(body.mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(error) => {
+            return respond_json(request, StatusCode(400), &ErrorResponse { error });
+        }
+    };
+    match session_workspace(app, session_id) {
+        Ok(workspace) => {
+            match workspace.write_text_with_mode(body.path.as_str(), &body.content, mode) {
+                Ok(result) => respond_json(
+                    request,
+                    StatusCode(200),
+                    &SessionWorkspaceWriteResponse {
+                        workspace_root: workspace.root.display().to_string(),
+                        path: body.path,
+                        bytes_written: result.bytes_written,
+                        created: result.created,
+                        overwritten: result.overwritten,
+                    },
+                ),
+                Err(error) => respond_json(
+                    request,
+                    workspace_error_status(&error),
+                    &ErrorResponse {
+                        error: error.to_string(),
+                    },
+                ),
+            }
+        }
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_mkdir(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let body = match parse_json_body::<SessionWorkspacePathRequest>(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid workspace mkdir request: {error}"),
+                },
+            );
+        }
+    };
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match workspace.mkdir(body.path.as_str()) {
+            Ok(path) => respond_json(
+                request,
+                StatusCode(200),
+                &SessionWorkspaceMkdirResponse {
+                    workspace_root: workspace.root.display().to_string(),
+                    path,
+                },
+            ),
+            Err(error) => respond_json(
+                request,
+                workspace_error_status(&error),
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            ),
+        },
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_trash(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let body = match parse_json_body::<SessionWorkspacePathRequest>(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid workspace trash request: {error}"),
+                },
+            );
+        }
+    };
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match workspace.trash_path(body.path.as_str()) {
+            Ok((path, trash_path)) => respond_json(
+                request,
+                StatusCode(200),
+                &SessionWorkspaceTrashResponse {
+                    workspace_root: workspace.root.display().to_string(),
+                    path,
+                    trash_path,
+                },
+            ),
+            Err(error) => respond_json(
+                request,
+                workspace_error_status(&error),
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            ),
+        },
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn workspace_write_mode(input: Option<&str>) -> Result<WriteMode, String> {
+    match input
+        .unwrap_or("upsert")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "create" => Ok(WriteMode::Create),
+        "overwrite" => Ok(WriteMode::Overwrite),
+        "upsert" => Ok(WriteMode::Upsert),
+        other => Err(format!(
+            "workspace write mode must be create, overwrite, or upsert; got {other}"
+        )),
     }
 }
 

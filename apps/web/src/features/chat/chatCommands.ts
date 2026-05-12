@@ -5,6 +5,7 @@ export type ChatCommandId =
   | "open-status"
   | "open-tasks"
   | "open-files"
+  | "open-skills"
   | "open-tools"
   | "open-debug"
   | "open-agents"
@@ -99,6 +100,12 @@ export const chatCommands: ChatCommand[] = [
     command: "/files",
     title: "Файлы",
     detail: "открыть workspace и artifacts выбранной сессии"
+  },
+  {
+    id: "open-skills",
+    command: "/skills",
+    title: "Skills",
+    detail: "открыть навыки выбранной сессии"
   },
   {
     id: "open-tools",

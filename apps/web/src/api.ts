@@ -11,7 +11,10 @@ import type {
   WebSnapshot,
   WorkerOutcome,
   WorkspaceFile,
-  WorkspaceList
+  WorkspaceList,
+  WorkspaceMkdirResult,
+  WorkspaceTrashResult,
+  WorkspaceWriteResult
 } from "./types";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -108,6 +111,18 @@ export const api = {
   sessionSkills(sessionId: string, signal?: AbortSignal) {
     return requestJson<SessionSkillStatus[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/skills`), { signal });
   },
+  enableSessionSkill(sessionId: string, name: string) {
+    return requestJson<SessionSkillStatus[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/skills/enable`), {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+  },
+  disableSessionSkill(sessionId: string, name: string) {
+    return requestJson<SessionSkillStatus[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/skills/disable`), {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+  },
   workspaceList(
     sessionId: string,
     options: { path?: string; recursive?: boolean; limit?: number; offset?: number } = {},
@@ -133,6 +148,24 @@ export const api = {
   },
   workspaceDownloadUrl(sessionId: string, path: string) {
     return endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/download${queryString({ path })}`);
+  },
+  workspaceWrite(sessionId: string, path: string, content: string, mode: "create" | "overwrite" | "upsert") {
+    return requestJson<WorkspaceWriteResult>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/write`), {
+      method: "POST",
+      body: JSON.stringify({ path, content, mode })
+    });
+  },
+  workspaceMkdir(sessionId: string, path: string) {
+    return requestJson<WorkspaceMkdirResult>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/mkdir`), {
+      method: "POST",
+      body: JSON.stringify({ path })
+    });
+  },
+  workspaceTrash(sessionId: string, path: string) {
+    return requestJson<WorkspaceTrashResult>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/trash`), {
+      method: "POST",
+      body: JSON.stringify({ path })
+    });
   },
   artifactFiles(sessionId: string, signal?: AbortSignal) {
     return requestJson<{ artifacts: ArtifactFileSummary[] }>(

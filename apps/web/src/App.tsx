@@ -13,6 +13,7 @@ import { SessionsScreen } from "./features/sessions/SessionsScreen";
 import { TasksPane } from "./features/sessions/TasksPane";
 import { buildSessionEvents, type SessionPane } from "./features/sessions/sessionEvents";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
+import { SkillsScreen } from "./features/skills/SkillsScreen";
 import { ToolsTable } from "./features/tools/ToolsTable";
 import { TracesTable } from "./features/traces/TracesTable";
 import { JsonBlock, SectionHeader } from "./components/common";
@@ -260,6 +261,10 @@ export function App() {
       setSection("files");
       return;
     }
+    if (command.id === "open-skills") {
+      setSection("skills");
+      return;
+    }
     if (command.id === "open-debug") {
       setSection("sessions");
       return;
@@ -273,7 +278,7 @@ export function App() {
       return;
     }
     if (command.id === "send-help") {
-      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /tools, /debug.");
+      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /skills, /tools, /debug.");
       return;
     }
     if (!selectedSessionId) {
@@ -491,6 +496,8 @@ export function App() {
         );
       case "files":
         return <FilesScreen selectedSession={selectedSession} />;
+      case "skills":
+        return <SkillsScreen selectedSession={selectedSession} />;
       case "agents":
         return (
           <>

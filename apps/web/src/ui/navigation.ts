@@ -3,6 +3,7 @@ export type SectionId =
   | "chat"
   | "sessions"
   | "files"
+  | "skills"
   | "agents"
   | "tasks"
   | "tools"
@@ -15,6 +16,7 @@ export const sections: Array<{ id: SectionId; label: string; description: string
   { id: "chat", label: "Чат", description: "основная работа" },
   { id: "sessions", label: "Сессии", description: "timeline и debug" },
   { id: "files", label: "Файлы", description: "workspace и artifacts" },
+  { id: "skills", label: "Skills", description: "активация навыков" },
   { id: "agents", label: "Агенты", description: "профили и workspaces" },
   { id: "tasks", label: "Задачи", description: "registry и делегации" },
   { id: "tools", label: "Tools", description: "вызовы и ошибки" },

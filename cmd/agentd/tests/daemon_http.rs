@@ -515,6 +515,96 @@ fn daemon_http_exposes_session_workspace_and_artifact_files() {
 }
 
 #[test]
+fn daemon_http_can_mutate_session_workspace_files() {
+    let (temp, app, base_url) = test_app(Some("secret-token"));
+    let workspace_root = temp.path().join("mutable-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace");
+
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-mutable-files".to_string(),
+            title: "Mutable Files".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: workspace_root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 2,
+        })
+        .expect("put session");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let create_response = client
+        .post(format!(
+            "{base_url}/v1/sessions/session-mutable-files/workspace/write"
+        ))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({
+            "path": "notes/new.md",
+            "content": "hello\n",
+            "mode": "create"
+        }))
+        .send()
+        .expect("workspace write response");
+    assert_eq!(create_response.status(), StatusCode::OK);
+    assert_eq!(
+        std::fs::read_to_string(workspace_root.join("notes/new.md")).expect("read created file"),
+        "hello\n"
+    );
+
+    let overwrite_response = client
+        .post(format!(
+            "{base_url}/v1/sessions/session-mutable-files/workspace/write"
+        ))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({
+            "path": "notes/new.md",
+            "content": "updated\n",
+            "mode": "overwrite"
+        }))
+        .send()
+        .expect("workspace overwrite response");
+    assert_eq!(overwrite_response.status(), StatusCode::OK);
+    assert_eq!(
+        std::fs::read_to_string(workspace_root.join("notes/new.md"))
+            .expect("read overwritten file"),
+        "updated\n"
+    );
+
+    let mkdir_response = client
+        .post(format!(
+            "{base_url}/v1/sessions/session-mutable-files/workspace/mkdir"
+        ))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({ "path": "drafts" }))
+        .send()
+        .expect("workspace mkdir response");
+    assert_eq!(mkdir_response.status(), StatusCode::OK);
+    assert!(workspace_root.join("drafts").is_dir());
+
+    let trash_response = client
+        .post(format!(
+            "{base_url}/v1/sessions/session-mutable-files/workspace/trash"
+        ))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({ "path": "notes/new.md" }))
+        .send()
+        .expect("workspace trash response");
+    assert_eq!(trash_response.status(), StatusCode::OK);
+    assert!(!workspace_root.join("notes/new.md").exists());
+    assert!(workspace_root.join(".trash").is_dir());
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn daemon_http_can_render_and_cancel_task_registry_entries() {
     let (_temp, app, base_url) = test_app(Some("secret-token"));
     let session = app

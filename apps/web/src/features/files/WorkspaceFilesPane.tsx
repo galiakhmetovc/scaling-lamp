@@ -18,7 +18,8 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { EmptyState } from "../../components/common";
 import type { WorkspaceEntry, WorkspaceFile, WorkspaceList } from "../../types";
-import { FilePreview } from "./FilePreview";
+import { WorkspaceCreatePane } from "./WorkspaceCreatePane";
+import { WorkspaceEditor } from "./WorkspaceEditor";
 
 function parentPath(path: string): string {
   const normalized = path.replace(/\/+$/, "");
@@ -31,7 +32,12 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   const [recursive, setRecursive] = useState(false);
   const [list, setList] = useState<WorkspaceList | null>(null);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
+  const [editorContent, setEditorContent] = useState("");
+  const [newFilePath, setNewFilePath] = useState("");
+  const [newFileContent, setNewFileContent] = useState("");
+  const [newDirPath, setNewDirPath] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function load(nextPath = path, nextOffset = 0) {
@@ -56,9 +62,90 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   async function readFile(entry: WorkspaceEntry) {
     setError(null);
     try {
-      setSelectedFile(await api.workspaceRead(sessionId, entry.path));
+      const file = await api.workspaceRead(sessionId, entry.path);
+      setSelectedFile(file);
+      setEditorContent(file.content ?? "");
     } catch (readError) {
       setError(readError instanceof Error ? readError.message : String(readError));
+    }
+  }
+
+  async function saveSelectedFile() {
+    if (!selectedFile || selectedFile.content_truncated) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaceWrite(sessionId, selectedFile.path, editorContent, "overwrite");
+      const refreshed = await api.workspaceRead(sessionId, selectedFile.path);
+      setSelectedFile(refreshed);
+      setEditorContent(refreshed.content ?? "");
+      await load(path);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createFile() {
+    const targetPath = newFilePath.trim();
+    if (!targetPath) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaceWrite(sessionId, targetPath, newFileContent, "create");
+      const file = await api.workspaceRead(sessionId, targetPath);
+      setSelectedFile(file);
+      setEditorContent(file.content ?? "");
+      setNewFilePath("");
+      setNewFileContent("");
+      await load(parentPath(targetPath));
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createDirectory() {
+    const targetPath = newDirPath.trim();
+    if (!targetPath) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaceMkdir(sessionId, targetPath);
+      setNewDirPath("");
+      await load(parentPath(targetPath));
+    } catch (mkdirError) {
+      setError(mkdirError instanceof Error ? mkdirError.message : String(mkdirError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function trashEntry(entry: WorkspaceEntry) {
+    if (!window.confirm(`Переместить в .trash: ${entry.path}?`)) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaceTrash(sessionId, entry.path);
+      if (selectedFile?.path === entry.path) {
+        setSelectedFile(null);
+        setEditorContent("");
+      }
+      await load(path);
+    } catch (trashError) {
+      setError(trashError instanceof Error ? trashError.message : String(trashError));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -67,8 +154,12 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   }
 
   useEffect(() => {
+    setSelectedFile(null);
+    setEditorContent("");
     void load("");
   }, [sessionId]);
+
+  const editorDirty = selectedFile ? (selectedFile.content ?? "") !== editorContent : false;
 
   return (
     <Stack spacing={1.5}>
@@ -97,6 +188,18 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
 
       {error ? <Alert severity="error">{error}</Alert> : null}
 
+      <WorkspaceCreatePane
+        filePath={newFilePath}
+        fileContent={newFileContent}
+        dirPath={newDirPath}
+        saving={saving}
+        onFilePathChange={setNewFilePath}
+        onFileContentChange={setNewFileContent}
+        onDirPathChange={setNewDirPath}
+        onCreateFile={() => void createFile()}
+        onCreateDirectory={() => void createDirectory()}
+      />
+
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
           <TableHead>
@@ -116,16 +219,24 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
                     {entry.kind === "directory" ? (
-                      <Button size="small" variant="outlined" onClick={() => void load(entry.path)}>
-                        Открыть
-                      </Button>
+                      <>
+                        <Button size="small" variant="outlined" onClick={() => void load(entry.path)}>
+                          Открыть
+                        </Button>
+                        <Button size="small" color="error" variant="outlined" onClick={() => void trashEntry(entry)}>
+                          В .trash
+                        </Button>
+                      </>
                     ) : (
                       <>
                         <Button size="small" variant="outlined" onClick={() => void readFile(entry)}>
-                          Читать
+                          Открыть
                         </Button>
                         <Button size="small" variant="outlined" onClick={() => download(entry.path)}>
                           Скачать
+                        </Button>
+                        <Button size="small" color="error" variant="outlined" onClick={() => void trashEntry(entry)}>
+                          В .trash
                         </Button>
                       </>
                     )}
@@ -151,13 +262,13 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
       ) : null}
 
       {selectedFile ? (
-        <FilePreview
-          title={selectedFile.path}
-          subtitle={selectedFile.workspace_root}
-          bytes={selectedFile.byte_len}
-          content={selectedFile.content}
-          text={selectedFile.text}
-          truncated={selectedFile.content_truncated}
+        <WorkspaceEditor
+          file={selectedFile}
+          content={editorContent}
+          dirty={editorDirty}
+          saving={saving}
+          onContentChange={setEditorContent}
+          onSave={() => void saveSelectedFile()}
           onDownload={() => download(selectedFile.path)}
         />
       ) : null}

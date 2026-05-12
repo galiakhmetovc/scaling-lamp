@@ -354,6 +354,40 @@ pub struct SessionWorkspaceFileResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceWriteRequest {
+    pub path: String,
+    pub content: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspacePathRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceWriteResponse {
+    pub workspace_root: String,
+    pub path: String,
+    pub bytes_written: usize,
+    pub created: bool,
+    pub overwritten: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceMkdirResponse {
+    pub workspace_root: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceTrashResponse {
+    pub workspace_root: String,
+    pub path: String,
+    pub trash_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryRenderResponse {
     pub memory: String,
 }

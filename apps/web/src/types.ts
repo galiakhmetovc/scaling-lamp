@@ -239,6 +239,25 @@ export type WorkspaceFile = {
   text: boolean;
 };
 
+export type WorkspaceWriteResult = {
+  workspace_root: string;
+  path: string;
+  bytes_written: number;
+  created: boolean;
+  overwritten: boolean;
+};
+
+export type WorkspaceMkdirResult = {
+  workspace_root: string;
+  path: string;
+};
+
+export type WorkspaceTrashResult = {
+  workspace_root: string;
+  path: string;
+  trash_path: string;
+};
+
 export type ArtifactFileSummary = {
   id: string;
   session_id: string;

@@ -26,6 +26,9 @@ Web Console не является вторым агентным runtime.
 - transcript: `GET /v1/sessions/{id}/transcript-tail/{limit}`;
 - debug: `GET /v1/sessions/{id}/debug`;
 - task registry сессии: `GET /v1/sessions/{id}/tasks`;
+- workspace files: `GET /v1/sessions/{id}/workspace/list|read|download`, `POST /v1/sessions/{id}/workspace/write|mkdir|trash`;
+- artifact files: `GET /v1/sessions/{id}/artifact-files`;
+- session skills: `GET /v1/sessions/{id}/skills`, `POST /v1/sessions/{id}/skills/enable|disable`;
 - отправка сообщения: `POST /v1/chat/turn`;
 - создание сессии: `POST /v1/sessions`;
 - создание агента: `POST /v1/agents`.
@@ -124,6 +127,9 @@ Caddy должен проксировать:
 - создание сессии;
 - агенты: список и создание profile через `/v1/agents`;
 - tool calls: таблица с фильтром и ошибками;
+- файлы: просмотр workspace выбранной сессии, preview/download файлов, создание текстовых файлов и папок, редактирование текстовых файлов, перемещение в `.trash`;
+- artifact files: просмотр runtime artifacts, metadata, preview и download;
+- skills: просмотр навыков выбранной сессии и ручное enable/disable;
 - routes: delivery targets и Telegram bindings;
 - traces: таблица trace links.
 
@@ -145,6 +151,8 @@ apps/web/src/
 │   └── common.tsx
 ├── features/
 │   ├── chat/                       # основной рабочий чат
+│   ├── files/                      # workspace + artifacts
+│   ├── skills/                     # session skill activation
 │   ├── sessions/                   # timeline/transcript/debug/tasks/inspector
 │   ├── overview/
 │   ├── agents/
@@ -159,18 +167,40 @@ apps/web/src/
 
 Правило для будущих изменений: новый экран или крупный блок добавляется в `features/<domain>/`, а не в `App.tsx`. `App.tsx` может знать о состоянии приложения и выборе экрана, но не должен содержать таблицы, markdown renderer, карточки inspector или бизнес-разметку экранов.
 
-Ограничения:
+Ограничения текущей версии:
 
 - редактирование `SYSTEM.md`, `AGENTS.md` и `SKILL.md` пока не реализовано в web, потому что нужен отдельный безопасный `agentd` API для agent profile files;
+- workspace editor редактирует только текстовые файлы; для бинарных файлов доступен download;
+- если текстовый файл показан не полностью из-за лимита preview, сохранение отключено, чтобы не перезаписать файл обрезанным содержимым;
 - удаление/архивация агентов и сессий не вынесены в UI;
 - web пока не заменяет TUI, а закрывает read/review/operator-flow поверх тех же данных.
 
-## Дальнейший порядок работ
+## План Hermes-parity
 
-1. Добавить agent profile file API: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
-2. Добавить управление доступными tools и skills на профиль агента.
-3. Расширить review-flow для tool calls: arguments, stdout/stderr, result preview, artifact link, replay/copy.
-4. Добавить route editor для delivery targets и session output routes.
-5. Добавить task registry actions: cancel, restart, follow.
-6. Добавить Telegram/chat bindings editor.
-7. Добавить auth перед публикацией наружу.
+P1 — управляемость агентом:
+
+1. Workspace file editor: read/download/create/edit/trash для файлов сессии.
+2. Skills screen: видимость automatic/manual/disabled и ручной enable/disable.
+3. Agent profile files: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
+4. Tools policy UI: показать доступные tools профиля и будущие overrides.
+
+P2 — память и знания:
+
+1. Memory UI: semantic memory search/list/update/delete.
+2. KV UI: browse/edit/delete по scope (`operator`, `agent`, `workspace`, `session`).
+3. Recall preview: показать, что будет подмешано в prompt выбранной сессии.
+4. SilverBullet/knowledge boundary: явно показать, чем отличаются заметки, semantic memory и KV.
+
+P3 — control-plane роя:
+
+1. MCP UI: connectors, состояние, tools/resources/prompts.
+2. Operations dashboard: очереди NATS, active runs, task registry, delivery routes.
+3. Mission/conductor builder: создать задачу, выбрать агента, delivery target, follow/cancel.
+4. Reports/inbox: checkpoints, blockers, handoff, ready-for-human.
+
+P4 — polish:
+
+1. Terminal/PTY только после явной policy-модели и audit.
+2. PWA/mobile polish.
+3. Capability gates: аккуратные placeholders вместо пустых/сломанных экранов.
+4. Auth/roles перед широким внешним доступом.
