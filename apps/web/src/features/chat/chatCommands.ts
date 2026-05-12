@@ -3,6 +3,17 @@ export type ChatCommandId =
   | "refresh"
   | "open-sessions"
   | "open-status"
+  | "open-tasks"
+  | "open-tools"
+  | "open-debug"
+  | "open-agents"
+  | "open-routes"
+  | "approve"
+  | "autoapprove"
+  | "compact"
+  | "model"
+  | "think"
+  | "rename"
   | "stop"
   | "cancel"
   | "clear-input"
@@ -39,6 +50,72 @@ export const chatCommands: ChatCommand[] = [
     command: "/status",
     title: "Показать статус",
     detail: "развернуть правую панель состояния"
+  },
+  {
+    id: "approve",
+    command: "/approve",
+    title: "Approve",
+    detail: "одобрить последний ожидающий tool approval"
+  },
+  {
+    id: "autoapprove",
+    command: "/autoapprove",
+    title: "Auto-approve",
+    detail: "переключить auto-approve: /autoapprove on|off"
+  },
+  {
+    id: "compact",
+    command: "/compact",
+    title: "Compact",
+    detail: "сжать контекст выбранной сессии"
+  },
+  {
+    id: "model",
+    command: "/model",
+    title: "Модель",
+    detail: "показать или сменить модель: /model <name>"
+  },
+  {
+    id: "think",
+    command: "/think",
+    title: "Think level",
+    detail: "сменить режим размышления: /think off|low|medium|high"
+  },
+  {
+    id: "rename",
+    command: "/rename",
+    title: "Переименовать",
+    detail: "переименовать сессию: /rename <title>"
+  },
+  {
+    id: "open-tasks",
+    command: "/plan",
+    title: "План",
+    detail: "открыть task registry выбранной сессии"
+  },
+  {
+    id: "open-tools",
+    command: "/tools",
+    title: "Tools",
+    detail: "открыть последние tool calls"
+  },
+  {
+    id: "open-debug",
+    command: "/debug",
+    title: "Debug",
+    detail: "открыть timeline/debug выбранной сессии"
+  },
+  {
+    id: "open-agents",
+    command: "/agents",
+    title: "Агенты",
+    detail: "открыть профили агентов"
+  },
+  {
+    id: "open-routes",
+    command: "/routes",
+    title: "Маршруты",
+    detail: "открыть delivery targets и Telegram bindings"
   },
   {
     id: "stop",

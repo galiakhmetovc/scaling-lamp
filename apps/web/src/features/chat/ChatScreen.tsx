@@ -1,11 +1,26 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, Chip, Divider, LinearProgress, Paper, Stack, TextField, Typography } from "@mui/material";
 import { EmptyState, KeyValueTable, StatusChip } from "../../components/common";
 import { MarkdownMessage } from "../../components/MarkdownMessage";
-import type { SessionSummary, SessionTask, SessionTranscript, ToolCallSummary } from "../../types";
+import type {
+  PendingApproval,
+  PendingChatMessage,
+  SessionSummary,
+  SessionTask,
+  SessionTranscript,
+  ToolCallSummary,
+  TranscriptLine
+} from "../../types";
 import { formatTime, short } from "../../utils/format";
 import { SessionsTable } from "../sessions/SessionsTable";
-import { filterChatCommands, type ChatCommand } from "./chatCommands";
+import { ChatWorkStatus } from "./ChatWorkStatus";
+import { chatCommands, filterChatCommands, type ChatCommand } from "./chatCommands";
+
+type VisibleMessage = TranscriptLine & {
+  pending_id?: string;
+  pending_status?: PendingChatMessage["status"];
+  pending_error?: string | null;
+};
 
 export function ChatScreen({
   sessions,
@@ -14,6 +29,9 @@ export function ChatScreen({
   transcript,
   tasks,
   tools,
+  run,
+  pendingMessages,
+  pendingApprovals,
   sessionFilter,
   sessionsTotal,
   sessionsOffset,
@@ -23,6 +41,7 @@ export function ChatScreen({
   detailLoading,
   detailError,
   sending,
+  approving,
   onRefresh,
   onCreateSession,
   onSelectSession,
@@ -30,6 +49,8 @@ export function ChatScreen({
   onSessionsPageChange,
   onMessageChange,
   onSend,
+  onCommand,
+  onApprove,
   onCancelRun,
   onCancelAll
 }: {
@@ -39,6 +60,9 @@ export function ChatScreen({
   transcript: SessionTranscript | null;
   tasks: SessionTask[];
   tools: ToolCallSummary[];
+  run: unknown;
+  pendingMessages: PendingChatMessage[];
+  pendingApprovals: PendingApproval[];
   sessionFilter: string;
   sessionsTotal: number;
   sessionsOffset: number;
@@ -48,6 +72,7 @@ export function ChatScreen({
   detailLoading: boolean;
   detailError: string | null;
   sending: boolean;
+  approving: boolean;
   onRefresh: () => void;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
@@ -55,18 +80,41 @@ export function ChatScreen({
   onSessionsPageChange: (offset: number) => void;
   onMessageChange: (value: string) => void;
   onSend: () => void;
+  onCommand: (command: ChatCommand, rawInput: string) => void;
+  onApprove: (approvalId?: string) => void;
   onCancelRun: () => void;
   onCancelAll: () => void;
 }) {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
-  const visibleMessages = (transcript?.entries ?? []).filter((entry) => !entry.tool_name);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const visibleMessages = useMemo<VisibleMessage[]>(() => {
+    const transcriptMessages = (transcript?.entries ?? []).filter((entry) => !entry.tool_name);
+    const selectedPendingMessages = pendingMessages
+      .filter((entry) => entry.session_id === selectedSessionId)
+      .map((entry) => ({
+        role: entry.role,
+        content: entry.content,
+        created_at: entry.created_at,
+        pending_id: entry.id,
+        pending_status: entry.status,
+        pending_error: entry.error ?? null
+      }));
+    return [...transcriptMessages, ...selectedPendingMessages];
+  }, [pendingMessages, selectedSessionId, transcript]);
   const activeTasks = tasks.filter((task) => ["queued", "running", "in_progress"].includes(task.status));
   const selectedSessionTools = selectedSession ? tools.filter((tool) => tool.session_id === selectedSession.id) : [];
   const selectedSessionToolErrors = selectedSessionTools.filter((tool) => tool.status !== "completed" || tool.error);
   const commands = filterChatCommands(message);
+  const scrollKey = `${visibleMessages.length}:${visibleMessages.at(-1)?.created_at ?? 0}:${visibleMessages.at(-1)?.content.length ?? 0}:${sending}:${pendingApprovals.length}`;
 
-  function runCommand(command: ChatCommand) {
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ block: "end" });
+    });
+  }, [scrollKey]);
+
+  function runCommand(command: ChatCommand, rawInput = message) {
     switch (command.id) {
       case "new-session":
         onMessageChange("");
@@ -84,6 +132,26 @@ export function ChatScreen({
         onMessageChange("");
         setStatusOpen(true);
         break;
+      case "model":
+      case "think":
+      case "rename":
+        if (rawInput.trim() === command.command) {
+          onMessageChange(`${command.command} `);
+          break;
+        }
+        onCommand(command, rawInput);
+        break;
+      case "approve":
+      case "autoapprove":
+      case "compact":
+      case "open-tasks":
+      case "open-tools":
+      case "open-debug":
+      case "open-agents":
+      case "open-routes":
+        onMessageChange("");
+        onCommand(command, rawInput);
+        break;
       case "stop":
         onMessageChange("");
         onCancelRun();
@@ -96,9 +164,21 @@ export function ChatScreen({
         onMessageChange("");
         break;
       case "send-help":
-        onMessageChange("/help");
+        onMessageChange("");
+        onCommand(command, rawInput);
         break;
     }
+  }
+
+  function submitComposer() {
+    const trimmed = message.trim();
+    const commandName = trimmed.split(/\s+/, 1)[0].toLowerCase();
+    const exactCommand = chatCommands.find((command) => command.command === commandName);
+    if (exactCommand) {
+      runCommand(exactCommand, trimmed);
+      return;
+    }
+    onSend();
   }
 
   return (
@@ -165,6 +245,7 @@ export function ChatScreen({
                   <Box key={`${entry.created_at}-${index}`} className={`chat-message role-${entry.role}`}>
                     <Box className="chat-message-meta">
                       <Chip label={entry.role} color={entry.role === "assistant" ? "primary" : "default"} variant="outlined" />
+                      {entry.pending_status ? <Chip label={entry.pending_status === "failed" ? "ошибка" : "отправляется"} color={entry.pending_status === "failed" ? "error" : "info"} variant="outlined" /> : null}
                       <Typography variant="caption" color="text.secondary">
                         {formatTime(entry.created_at)}
                       </Typography>
@@ -181,9 +262,26 @@ export function ChatScreen({
                         {entry.content}
                       </Typography>
                     )}
+                    {entry.pending_error ? (
+                      <Typography variant="caption" color="error">
+                        {entry.pending_error}
+                      </Typography>
+                    ) : null}
                   </Box>
                 ))
               )}
+              <ChatWorkStatus
+                selectedSession={selectedSession}
+                tools={tools}
+                tasks={tasks}
+                pendingApprovals={pendingApprovals}
+                run={run}
+                sending={sending}
+                approving={approving}
+                onApprove={onApprove}
+                onCancelRun={onCancelRun}
+              />
+              <div ref={messagesEndRef} />
             </Box>
 
             <Divider />
@@ -212,7 +310,7 @@ export function ChatScreen({
                 placeholder="Введите задачу, вопрос или / для команд..."
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                    onSend();
+                    submitComposer();
                   }
                 }}
               />
@@ -220,7 +318,7 @@ export function ChatScreen({
                 <Typography variant="caption" color="text.secondary">
                   Ctrl/⌘ + Enter — отправить · / — команды
                 </Typography>
-                <Button variant="contained" onClick={onSend} disabled={sending || !message.trim()}>
+                <Button variant="contained" onClick={submitComposer} disabled={sending || !message.trim()}>
                   {sending ? "Отправка..." : "Отправить"}
                 </Button>
               </Stack>

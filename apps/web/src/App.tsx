@@ -15,7 +15,16 @@ import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ToolsTable } from "./features/tools/ToolsTable";
 import { TracesTable } from "./features/traces/TracesTable";
 import { JsonBlock, SectionHeader } from "./components/common";
-import type { SessionDebug, SessionSummary, SessionTask, SessionTranscript, WebSnapshot } from "./types";
+import type {
+  PendingApproval,
+  PendingChatMessage,
+  SessionDebug,
+  SessionSummary,
+  SessionTask,
+  SessionTranscript,
+  WebSnapshot
+} from "./types";
+import type { ChatCommand } from "./features/chat/chatCommands";
 import type { SectionId } from "./ui/navigation";
 
 const SESSION_PAGE_SIZE = 25;
@@ -29,6 +38,8 @@ export function App() {
   const [debug, setDebug] = useState<SessionDebug | null>(null);
   const [tasks, setTasks] = useState<SessionTask[]>([]);
   const [run, setRun] = useState<unknown>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [pendingMessages, setPendingMessages] = useState<PendingChatMessage[]>([]);
   const [sessionPane, setSessionPane] = useState<SessionPane>("timeline");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,6 +51,7 @@ export function App() {
   const [toolFilter, setToolFilter] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("Новая web-сессия");
@@ -78,26 +90,30 @@ export function App() {
     }
   }
 
-  async function loadSessionDetails(sessionId: string, signal?: AbortSignal) {
-    setDetailLoading(true);
-    setDetailError(null);
+  async function loadSessionDetails(sessionId: string, signal?: AbortSignal, quiet = false) {
+    if (!quiet) {
+      setDetailLoading(true);
+      setDetailError(null);
+    }
     try {
-      const [nextTranscript, nextDebug, nextTasks, nextRun] = await Promise.all([
+      const [nextTranscript, nextDebug, nextTasks, nextRun, nextApprovals] = await Promise.all([
         api.transcript(sessionId, 180, signal),
         api.debug(sessionId, signal),
         api.tasks(sessionId, signal),
-        api.run(sessionId, signal).catch((runError) => ({ error: runError instanceof Error ? runError.message : String(runError) }))
+        api.run(sessionId, signal).catch((runError) => ({ error: runError instanceof Error ? runError.message : String(runError) })),
+        api.pendingApprovals(sessionId, signal)
       ]);
       setTranscript(nextTranscript);
       setDebug(nextDebug);
       setTasks(nextTasks);
       setRun(nextRun);
+      setPendingApprovals(nextApprovals);
     } catch (loadError) {
       if (!signal?.aborted) {
         setDetailError(loadError instanceof Error ? loadError.message : String(loadError));
       }
     } finally {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && !quiet) {
         setDetailLoading(false);
       }
     }
@@ -119,6 +135,7 @@ export function App() {
       setDebug(null);
       setTasks([]);
       setRun(null);
+      setPendingApprovals([]);
       setSelectedEventId(null);
       return;
     }
@@ -128,6 +145,18 @@ export function App() {
   }, [selectedSessionId]);
 
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+
+  useEffect(() => {
+    if (!selectedSessionId || (!sending && !approving && pendingApprovals.length === 0 && !selectedSession?.has_pending_approval)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadSessionDetails(selectedSessionId, undefined, true);
+      void loadData(undefined, sessionsOffset);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [approving, pendingApprovals.length, selectedSession?.has_pending_approval, selectedSessionId, sending, sessionsOffset]);
+
   const sessionsTotal = snapshot?.status.session_count ?? sessions.length;
   const toolErrors = snapshot?.recent_tool_calls.filter((tool) => tool.status !== "completed" || tool.error).length ?? 0;
   const activeRuns = snapshot?.recent_runs.filter((runItem) => ["running", "queued"].includes(runItem.status)).length ?? 0;
@@ -153,18 +182,157 @@ export function App() {
     if (!selectedSessionId || !trimmed) {
       return;
     }
+    const sessionId = selectedSessionId;
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setPendingMessages((current) => [
+      ...current,
+      {
+        id: pendingId,
+        session_id: sessionId,
+        role: "user",
+        content: trimmed,
+        created_at: Math.floor(Date.now() / 1000),
+        status: "sending"
+      }
+    ]);
+    setMessage("");
     setSending(true);
     setNotice(null);
     try {
-      const result = await api.sendMessage(selectedSessionId, trimmed);
-      setMessage("");
+      const result = await api.sendMessage(sessionId, trimmed);
       setNotice(result.kind === "chat_completed" ? "Ответ получен, transcript обновлён." : `Runtime вернул: ${result.kind}`);
-      await loadData();
-      await loadSessionDetails(selectedSessionId);
+      await loadData(undefined, sessionsOffset, sessionId);
+      await loadSessionDetails(sessionId);
+      setPendingMessages((current) => current.filter((entry) => entry.id !== pendingId));
     } catch (sendError) {
-      setNotice(sendError instanceof Error ? sendError.message : String(sendError));
+      const errorText = sendError instanceof Error ? sendError.message : String(sendError);
+      setPendingMessages((current) =>
+        current.map((entry) => (entry.id === pendingId ? { ...entry, status: "failed", error: errorText } : entry))
+      );
+      setNotice(errorText);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function approveLatest(approvalId?: string) {
+    if (!selectedSessionId) {
+      setNotice("Сессия не выбрана.");
+      return;
+    }
+    const sessionId = selectedSessionId;
+    setApproving(true);
+    setNotice(null);
+    try {
+      const approvals =
+        pendingApprovals.length > 0 ? pendingApprovals : await api.pendingApprovals(sessionId);
+      const sortedApprovals = [...approvals].sort((left, right) => right.requested_at - left.requested_at);
+      const approval = approvalId
+        ? sortedApprovals.find((item) => item.approval_id === approvalId)
+        : sortedApprovals[0];
+      if (!approval) {
+        setNotice("Для выбранной сессии нет ожидающего approve.");
+        return;
+      }
+      const outcome = await api.approveRun(approval.run_id, approval.approval_id);
+      setNotice(outcome.kind === "approval_completed" ? "Approve выполнен, run продолжен." : `Runtime вернул: ${outcome.kind}`);
+      await loadData(undefined, sessionsOffset, sessionId);
+      await loadSessionDetails(sessionId);
+    } catch (approveError) {
+      setNotice(approveError instanceof Error ? approveError.message : String(approveError));
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  async function runChatCommand(command: ChatCommand, rawInput: string) {
+    const arg = rawInput.trim().replace(/^\S+\s*/, "").trim();
+    if (command.id === "open-tasks") {
+      setSection("tasks");
+      return;
+    }
+    if (command.id === "open-tools") {
+      setSection("tools");
+      return;
+    }
+    if (command.id === "open-debug") {
+      setSection("sessions");
+      return;
+    }
+    if (command.id === "open-agents") {
+      setSection("agents");
+      return;
+    }
+    if (command.id === "open-routes") {
+      setSection("routes");
+      return;
+    }
+    if (command.id === "send-help") {
+      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /tools, /debug.");
+      return;
+    }
+    if (!selectedSessionId) {
+      setNotice("Сессия не выбрана.");
+      return;
+    }
+
+    try {
+      if (command.id === "approve") {
+        await approveLatest(arg || undefined);
+        return;
+      }
+      if (command.id === "compact") {
+        const summary = await api.compactSession(selectedSessionId);
+        setNotice(`Context compact выполнен. Сжатий: ${summary.compactifications}.`);
+        await loadData(undefined, sessionsOffset, selectedSessionId);
+        await loadSessionDetails(selectedSessionId);
+        return;
+      }
+      if (command.id === "autoapprove") {
+        const normalized = arg.toLowerCase();
+        const nextValue =
+          normalized === "on" || normalized === "true" || normalized === "1"
+            ? true
+            : normalized === "off" || normalized === "false" || normalized === "0"
+              ? false
+              : !selectedSession?.auto_approve;
+        const summary = await api.updateSessionPreferences(selectedSessionId, { auto_approve: nextValue });
+        setNotice(`Auto-approve: ${summary.auto_approve ? "включён" : "выключен"}.`);
+        await loadData(undefined, sessionsOffset, selectedSessionId);
+        return;
+      }
+      if (command.id === "model") {
+        if (!arg) {
+          setNotice(`Текущая модель: ${selectedSession?.model || "default"}. Для смены: /model <name>.`);
+          return;
+        }
+        const summary = await api.updateSessionPreferences(selectedSessionId, { model: arg === "default" ? null : arg });
+        setNotice(`Модель: ${summary.model || "default"}.`);
+        await loadData(undefined, sessionsOffset, selectedSessionId);
+        return;
+      }
+      if (command.id === "think") {
+        if (!arg) {
+          setNotice(`Think level: ${selectedSession?.think_level || "default"}. Для смены: /think off|low|medium|high|default.`);
+          return;
+        }
+        const nextThink = arg === "default" ? null : arg;
+        const summary = await api.updateSessionPreferences(selectedSessionId, { think_level: nextThink });
+        setNotice(`Think level: ${summary.think_level || "default"}.`);
+        await loadData(undefined, sessionsOffset, selectedSessionId);
+        return;
+      }
+      if (command.id === "rename") {
+        if (!arg) {
+          setNotice("Укажи новое имя: /rename <title>.");
+          return;
+        }
+        const summary = await api.updateSessionPreferences(selectedSessionId, { title: arg });
+        setNotice(`Сессия переименована: ${summary.title}.`);
+        await loadData(undefined, sessionsOffset, selectedSessionId);
+      }
+    } catch (commandError) {
+      setNotice(commandError instanceof Error ? commandError.message : String(commandError));
     }
   }
 
@@ -254,6 +422,9 @@ export function App() {
             transcript={transcript}
             tasks={tasks}
             tools={snapshot?.recent_tool_calls ?? []}
+            run={run}
+            pendingMessages={pendingMessages}
+            pendingApprovals={pendingApprovals}
             sessionFilter={sessionFilter}
             sessionsTotal={sessionsTotal}
             sessionsOffset={sessionsOffset}
@@ -263,13 +434,16 @@ export function App() {
             detailLoading={detailLoading}
             detailError={detailError}
             sending={sending}
-            onRefresh={() => void loadData()}
+            approving={approving}
+            onRefresh={refreshSelectedSession}
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
             onFilterChange={setSessionFilter}
             onSessionsPageChange={setSessionsOffset}
             onMessageChange={setMessage}
             onSend={() => void submitMessage()}
+            onCommand={(command, rawInput) => void runChatCommand(command, rawInput)}
+            onApprove={(approvalId) => void approveLatest(approvalId)}
             onCancelRun={() => void cancelRun(false)}
             onCancelAll={() => void cancelRun(true)}
           />

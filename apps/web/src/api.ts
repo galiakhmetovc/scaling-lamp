@@ -1,5 +1,8 @@
 import type {
+  PendingApproval,
   SessionDebug,
+  SessionPreferencesPatch,
+  SessionSkillStatus,
   SessionSummary,
   SessionTask,
   SessionTranscript,
@@ -81,6 +84,27 @@ export const api = {
   run(sessionId: string, signal?: AbortSignal) {
     return requestJson<unknown>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/run`), { signal });
   },
+  pendingApprovals(sessionId: string, signal?: AbortSignal) {
+    return requestJson<PendingApproval[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/approvals`), { signal });
+  },
+  sessionPlan(sessionId: string, signal?: AbortSignal) {
+    return requestJson<{ plan: string }>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/plan`), { signal });
+  },
+  sessionSkills(sessionId: string, signal?: AbortSignal) {
+    return requestJson<SessionSkillStatus[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/skills`), { signal });
+  },
+  updateSessionPreferences(sessionId: string, patch: SessionPreferencesPatch) {
+    return requestJson<SessionSummary>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/preferences`), {
+      method: "PATCH",
+      body: JSON.stringify(patch)
+    });
+  },
+  compactSession(sessionId: string) {
+    return requestJson<SessionSummary>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/compact`), {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+  },
   sendMessage(sessionId: string, message: string) {
     return requestJson<WorkerOutcome>(endpoint("/v1/chat/turn"), {
       method: "POST",
@@ -90,6 +114,16 @@ export const api = {
         now: Math.floor(Date.now() / 1000),
         surface: "web",
         entrypoint: "teamd.web_console"
+      })
+    });
+  },
+  approveRun(runId: string, approvalId: string) {
+    return requestJson<WorkerOutcome>(endpoint("/v1/runs/approve"), {
+      method: "POST",
+      body: JSON.stringify({
+        run_id: runId,
+        approval_id: approvalId,
+        now: Math.floor(Date.now() / 1000)
       })
     });
   },

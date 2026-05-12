@@ -138,6 +138,16 @@ export type TranscriptLine = {
   approval_id?: string | null;
 };
 
+export type PendingChatMessage = {
+  id: string;
+  session_id: string;
+  role: "user";
+  content: string;
+  created_at: number;
+  status: "sending" | "failed";
+  error?: string | null;
+};
+
 export type SessionTranscript = {
   session_id: string;
   entries: TranscriptLine[];
@@ -181,8 +191,32 @@ export type SessionTask = {
   error?: string | null;
 };
 
+export type PendingApproval = {
+  run_id: string;
+  approval_id: string;
+  reason: string;
+  requested_at: number;
+};
+
+export type SessionSkillStatus = {
+  name: string;
+  description: string;
+  mode: string;
+};
+
+export type SessionPreferencesPatch = {
+  title?: string;
+  model?: string | null;
+  reasoning_visible?: boolean;
+  think_level?: string | null;
+  compactifications?: number;
+  completion_nudges?: number | null;
+  auto_approve?: boolean;
+};
+
 export type WorkerOutcome =
   | { kind: "chat_completed"; report: { session_id: string; run_id: string; output_text?: string | null } }
+  | { kind: "approval_completed"; report: { run_id: string; output_text?: string | null; approval_id?: string | null } }
   | { kind: "approval_required"; approval_id: string; reason: string }
   | { kind: "interrupted_by_queued_input" }
   | { kind: "failed"; reason: string }
