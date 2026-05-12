@@ -1,67 +1,120 @@
-# Web Control Plane
+# Web Console
 
-`apps/control-plane` is the imported React/Node web control-plane adapted from `hermes-workspace`.
+`apps/web` — собственный web-интерфейс teamD. Импортированный Hermes control-plane удалён: он был слишком тяжёлым, содержал чужие доменные сущности и создавал риск второго runtime.
 
-## Status
+## Назначение
 
-The app is imported as a big-bang port. Many Hermes screens and endpoints are intentionally still present while they are adapted to `teamD`.
+Web Console — операторская панель поверх уже существующего `agentd`.
 
-The first adapted boundary is:
+Он нужен для:
 
-- `GET /api/ping`
-- `GET /api/teamd-status`
+- просмотра состояния runtime, Postgres, NATS и сборки;
+- работы с сессиями: список, transcript, debug, task registry, active run;
+- просмотра агентов, tool calls, delivery routes, Telegram bindings и traces;
+- базового создания сессий и agent profiles через существующие HTTP endpoints;
+- дальнейшего управления роем агентов без дублирования chat/runtime logic.
 
-Both read `agentd`, not the Hermes gateway.
+## Главный инвариант
 
-## Runtime Boundary
+Web Console не является вторым агентным runtime.
 
-The control-plane is a web shell and adapter layer. It may own UI state, auth, rendering, and route normalization. It must not become a second agent runtime.
+Все действия идут через canonical `agentd` HTTP API:
 
-Canonical runtime responsibilities remain in `agentd`:
+- snapshot: `GET /v1/web/snapshot`;
+- список сессий: `GET /v1/sessions`;
+- transcript: `GET /v1/sessions/{id}/transcript-tail/{limit}`;
+- debug: `GET /v1/sessions/{id}/debug`;
+- task registry сессии: `GET /v1/sessions/{id}/tasks`;
+- отправка сообщения: `POST /v1/chat/turn`;
+- создание сессии: `POST /v1/sessions`;
+- создание агента: `POST /v1/agents`.
 
-- session state;
-- prompt assembly;
-- model calls;
-- tool execution;
-- agent profiles;
-- task registry;
-- routing and delivery;
-- Postgres persistence;
-- NATS event flow.
+Frontend ходит не напрямую в демон, а через proxy path:
 
-## Configuration
-
-Run the control-plane with:
-
-```sh
-cd apps/control-plane
-pnpm install
-TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 pnpm dev
+```text
+/api/agentd/v1/* -> agentd /v1/*
 ```
 
-Optional:
+Это позволяет держать token и внутренний адрес `agentd` на server side.
+
+## UI-правила
+
+Базовый UI-подход — Google Material Design через MUI.
+
+Приоритеты интерфейса:
+
+- таблицы, фильтры, списки, формы;
+- явные статусы, loading/error/empty states;
+- плотная операторская компоновка;
+- русские UI-тексты по умолчанию;
+- английские code identifiers, filenames, API fields, classes и functions.
+
+Не делаем:
+
+- marketing landing;
+- декоративный hero;
+- визуальный шум;
+- отдельный tool loop или отдельный prompt/chat path.
+
+## Запуск для разработки
 
 ```sh
-TEAMD_AGENTD_TOKEN=...
+cd apps/web
+corepack pnpm install
+TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 corepack pnpm dev
 ```
 
-## Imported Upstream
+Vite dev server слушает `0.0.0.0:5173`.
 
-- Repository: `https://github.com/outsourc-e/hermes-workspace`
-- License: MIT
-- Local attribution: `apps/control-plane/LICENSE`
-- Adaptation notes: `apps/control-plane/TEAMD_ADAPTATION.md`
+Если у `agentd` включён bearer token:
 
-## Adaptation Queue
+```sh
+TEAMD_AGENTD_TOKEN=... corepack pnpm dev
+```
 
-The intended module order is:
+## Production run
 
-1. Runtime health and snapshot.
-2. Chat and sessions.
-3. Agents and profile editing.
-4. Tasks, routes, delivery targets, and schedules.
-5. Files, artifacts, editor, and terminal.
-6. Memory, KV, SilverBullet, skills, MCP, and tools.
-7. Swarm/mesh operation views.
-8. Settings, auth, deployment, and mobile/PWA polish.
+```sh
+cd apps/web
+corepack pnpm build
+TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 node server.mjs
+```
 
+Переменные:
+
+- `TEAMD_WEB_HOST` или `HOST` — host bind, по умолчанию `0.0.0.0`;
+- `TEAMD_WEB_PORT` или `PORT` — порт, по умолчанию `5173`;
+- `TEAMD_AGENTD_BASE_URL` — URL демона, по умолчанию `http://127.0.0.1:5140`;
+- `TEAMD_AGENTD_TOKEN` — bearer token для `agentd`, если включена авторизация;
+- `TEAMD_AGENTD_TIMEOUT_MS` — timeout proxy-запросов, по умолчанию `120000`.
+
+## Текущий статус
+
+Реализовано:
+
+- native React/Vite/MUI приложение;
+- Node static server + reverse proxy к `agentd`;
+- обзор runtime;
+- сессии: список, фильтр, transcript, debug, tasks, active run;
+- отправка сообщения через `/v1/chat/turn`;
+- создание сессии;
+- агенты: список и создание profile через `/v1/agents`;
+- tool calls: таблица с фильтром и ошибками;
+- routes: delivery targets и Telegram bindings;
+- traces: таблица trace links.
+
+Ограничения:
+
+- редактирование `SYSTEM.md`, `AGENTS.md` и `SKILL.md` пока не реализовано в web, потому что нужен отдельный безопасный `agentd` API для agent profile files;
+- удаление/архивация агентов и сессий не вынесены в UI;
+- web пока не заменяет TUI, а закрывает read/review/operator-flow поверх тех же данных.
+
+## Дальнейший порядок работ
+
+1. Добавить agent profile file API: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
+2. Добавить управление доступными tools и skills на профиль агента.
+3. Добавить review-flow для tool calls: detail pane, arguments, result preview, artifact link.
+4. Добавить route editor для delivery targets и session output routes.
+5. Добавить task registry actions: cancel, restart, follow.
+6. Добавить Telegram/chat bindings editor.
+7. Добавить auth перед публикацией наружу.
