@@ -471,6 +471,22 @@ body {
   background: #11161d;
 }
 
+.file-preview {
+  max-height: 520px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #0d1117;
+  color: rgba(255, 255, 255, 0.82);
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .notice {
   position: fixed;
   right: 20px;

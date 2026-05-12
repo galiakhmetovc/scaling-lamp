@@ -214,6 +214,47 @@ export type SessionPreferencesPatch = {
   auto_approve?: boolean;
 };
 
+export type WorkspaceEntry = {
+  path: string;
+  kind: "file" | "directory" | string;
+  bytes?: number | null;
+};
+
+export type WorkspaceList = {
+  workspace_root: string;
+  path: string;
+  entries: WorkspaceEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  next_offset?: number | null;
+};
+
+export type WorkspaceFile = {
+  workspace_root: string;
+  path: string;
+  byte_len: number;
+  content?: string | null;
+  content_truncated: boolean;
+  text: boolean;
+};
+
+export type ArtifactFileSummary = {
+  id: string;
+  session_id: string;
+  kind: string;
+  metadata_json: string;
+  path: string;
+  byte_len: number;
+  created_at: number;
+};
+
+export type ArtifactFile = ArtifactFileSummary & {
+  content?: string | null;
+  content_truncated: boolean;
+  text: boolean;
+};
+
 export type WorkerOutcome =
   | { kind: "chat_completed"; report: { session_id: string; run_id: string; output_text?: string | null } }
   | { kind: "approval_completed"; report: { run_id: string; output_text?: string | null; approval_id?: string | null } }

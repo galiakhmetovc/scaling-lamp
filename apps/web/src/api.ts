@@ -1,4 +1,6 @@
 import type {
+  ArtifactFile,
+  ArtifactFileSummary,
   PendingApproval,
   SessionDebug,
   SessionPreferencesPatch,
@@ -7,7 +9,9 @@ import type {
   SessionTask,
   SessionTranscript,
   WebSnapshot,
-  WorkerOutcome
+  WorkerOutcome,
+  WorkspaceFile,
+  WorkspaceList
 } from "./types";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -30,6 +34,17 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 function endpoint(path: string): string {
   return `/api/agentd${path}`;
+}
+
+function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  }
+  const rendered = query.toString();
+  return rendered ? `?${rendered}` : "";
 }
 
 export const api = {
@@ -92,6 +107,47 @@ export const api = {
   },
   sessionSkills(sessionId: string, signal?: AbortSignal) {
     return requestJson<SessionSkillStatus[]>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/skills`), { signal });
+  },
+  workspaceList(
+    sessionId: string,
+    options: { path?: string; recursive?: boolean; limit?: number; offset?: number } = {},
+    signal?: AbortSignal
+  ) {
+    return requestJson<WorkspaceList>(
+      endpoint(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/workspace/list${queryString({
+          path: options.path ?? "",
+          recursive: options.recursive ?? false,
+          limit: options.limit ?? 100,
+          offset: options.offset ?? 0
+        })}`
+      ),
+      { signal }
+    );
+  },
+  workspaceRead(sessionId: string, path: string, signal?: AbortSignal) {
+    return requestJson<WorkspaceFile>(
+      endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/read${queryString({ path })}`),
+      { signal }
+    );
+  },
+  workspaceDownloadUrl(sessionId: string, path: string) {
+    return endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/download${queryString({ path })}`);
+  },
+  artifactFiles(sessionId: string, signal?: AbortSignal) {
+    return requestJson<{ artifacts: ArtifactFileSummary[] }>(
+      endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files`),
+      { signal }
+    );
+  },
+  artifactFile(sessionId: string, artifactId: string, signal?: AbortSignal) {
+    return requestJson<ArtifactFile>(
+      endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${encodeURIComponent(artifactId)}`),
+      { signal }
+    );
+  },
+  artifactDownloadUrl(sessionId: string, artifactId: string) {
+    return endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${encodeURIComponent(artifactId)}/download`);
   },
   updateSessionPreferences(sessionId: string, patch: SessionPreferencesPatch) {
     return requestJson<SessionSummary>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/preferences`), {

@@ -1,8 +1,8 @@
 use agent_persistence::{
-    A2APeerConfig, AppConfig, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, RunRepository, SessionInboxRepository, SessionRecord, SessionRepository,
-    TaskRegistryRecord, TaskRegistryRepository, ToolCallRecord, ToolCallRepository,
-    TranscriptRecord, TranscriptRepository, audit::DiagnosticEvent,
+    A2APeerConfig, AppConfig, ArtifactRecord, ArtifactRepository, JobRecord, JobRepository,
+    MissionRecord, MissionRepository, PersistenceStore, RunRepository, SessionInboxRepository,
+    SessionRecord, SessionRepository, TaskRegistryRecord, TaskRegistryRepository, ToolCallRecord,
+    ToolCallRepository, TranscriptRecord, TranscriptRepository, audit::DiagnosticEvent,
 };
 use agent_runtime::mission::{
     JobExecutionInput, JobResult, JobSpec, JobStatus, MissionExecutionIntent, MissionSchedule,
@@ -19,9 +19,10 @@ use agentd::http::types::{
     A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
     DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
     McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
-    MemoryRenderResponse, SessionBackgroundJobResponse, SessionDebugResponse,
-    SessionSummaryResponse, SkillCommandRequest, StatusResponse, TaskControlResponse,
-    TaskRenderResponse,
+    MemoryRenderResponse, SessionArtifactFileResponse, SessionArtifactFilesResponse,
+    SessionBackgroundJobResponse, SessionDebugResponse, SessionSummaryResponse,
+    SessionWorkspaceFileResponse, SessionWorkspaceListResponse, SkillCommandRequest,
+    StatusResponse, TaskControlResponse, TaskRenderResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -390,6 +391,125 @@ fn daemon_http_can_render_session_debug_view() {
     assert_eq!(debug.entries.len(), 1);
     assert_eq!(debug.entries[0].kind, "message");
     assert!(debug.entries[0].detail.contains("debug me"));
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_exposes_session_workspace_and_artifact_files() {
+    let (temp, app, base_url) = test_app(Some("secret-token"));
+    let workspace_root = temp.path().join("session-workspace");
+    std::fs::create_dir_all(workspace_root.join("docs")).expect("create docs");
+    std::fs::write(workspace_root.join("docs/report.txt"), "workspace report\n")
+        .expect("write workspace file");
+    std::fs::write(workspace_root.join("binary.bin"), [0, 159, 146, 150])
+        .expect("write binary file");
+
+    let store = app.store().expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-files".to_string(),
+            title: "Files".to_string(),
+            prompt_override: None,
+            settings_json: "{}".to_string(),
+            workspace_root: workspace_root.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 2,
+        })
+        .expect("put session");
+    store
+        .put_artifact(&ArtifactRecord {
+            id: "artifact-http-1".to_string(),
+            session_id: "session-files".to_string(),
+            kind: "workspace_file".to_string(),
+            metadata_json: r#"{"workspace_path":"docs/report.txt"}"#.to_string(),
+            path: std::path::PathBuf::from("artifacts/artifact-http-1.bin"),
+            bytes: b"artifact bytes\n".to_vec(),
+            created_at: 3,
+        })
+        .expect("put artifact");
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let list_response = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/workspace/list?path=docs"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("workspace list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list: SessionWorkspaceListResponse = list_response.json().expect("workspace list json");
+    assert_eq!(list.entries.len(), 1);
+    assert_eq!(list.entries[0].path, "docs/report.txt");
+
+    let read_response = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/workspace/read?path=docs/report.txt"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("workspace read response");
+    assert_eq!(read_response.status(), StatusCode::OK);
+    let read: SessionWorkspaceFileResponse = read_response.json().expect("workspace read json");
+    assert_eq!(read.content.as_deref(), Some("workspace report\n"));
+    assert!(read.text);
+
+    let download = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/workspace/download?path=docs/report.txt"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("workspace download response");
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(
+        download.bytes().expect("download bytes").as_ref(),
+        b"workspace report\n"
+    );
+
+    let artifacts_response = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/artifact-files"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("artifact list response");
+    assert_eq!(artifacts_response.status(), StatusCode::OK);
+    let artifacts: SessionArtifactFilesResponse =
+        artifacts_response.json().expect("artifact list json");
+    assert_eq!(artifacts.artifacts.len(), 1);
+    assert_eq!(artifacts.artifacts[0].id, "artifact-http-1");
+
+    let artifact_response = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/artifact-files/artifact-http-1"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("artifact read response");
+    assert_eq!(artifact_response.status(), StatusCode::OK);
+    let artifact: SessionArtifactFileResponse = artifact_response.json().expect("artifact json");
+    assert_eq!(artifact.content.as_deref(), Some("artifact bytes\n"));
+
+    let artifact_download = client
+        .get(format!(
+            "{base_url}/v1/sessions/session-files/artifact-files/artifact-http-1/download"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("artifact download response");
+    assert_eq!(artifact_download.status(), StatusCode::OK);
+    assert_eq!(
+        artifact_download.bytes().expect("artifact bytes").as_ref(),
+        b"artifact bytes\n"
+    );
 
     handle.stop().expect("stop daemon");
 }

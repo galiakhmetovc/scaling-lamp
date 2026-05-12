@@ -296,6 +296,64 @@ pub struct SessionArtifactResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifactFileSummaryResponse {
+    pub id: String,
+    pub session_id: String,
+    pub kind: String,
+    pub metadata_json: String,
+    pub path: String,
+    pub byte_len: usize,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifactFilesResponse {
+    pub artifacts: Vec<SessionArtifactFileSummaryResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifactFileResponse {
+    pub id: String,
+    pub session_id: String,
+    pub kind: String,
+    pub metadata_json: String,
+    pub path: String,
+    pub byte_len: usize,
+    pub created_at: i64,
+    pub content: Option<String>,
+    pub content_truncated: bool,
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceEntryResponse {
+    pub path: String,
+    pub kind: String,
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceListResponse {
+    pub workspace_root: String,
+    pub path: String,
+    pub entries: Vec<SessionWorkspaceEntryResponse>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorkspaceFileResponse {
+    pub workspace_root: String,
+    pub path: String,
+    pub byte_len: u64,
+    pub content: Option<String>,
+    pub content_truncated: bool,
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryRenderResponse {
     pub memory: String,
 }

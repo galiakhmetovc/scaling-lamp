@@ -1,20 +1,30 @@
 use super::*;
 use crate::http::types::{
     ClearSessionRequest, CreateSessionRequest, DebugBundleResponse, ErrorResponse,
-    MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactResponse,
+    MemoryRenderResponse, SessionAgentMessageRequest, SessionArtifactFileResponse,
+    SessionArtifactFileSummaryResponse, SessionArtifactFilesResponse, SessionArtifactResponse,
     SessionArtifactsResponse, SessionBackgroundJobResponse, SessionBackgroundJobsResponse,
     SessionChainGrantRequest, SessionDebugResponse, SessionDetailResponse,
     SessionPendingApprovalsResponse, SessionPreferencesRequest, SessionRunControlResponse,
     SessionRunStatusResponse, SessionSkillsResponse, SessionSummaryResponse, SessionSystemResponse,
-    SessionTaskResponse, SessionTasksResponse, SessionTranscriptResponse, SkillCommandRequest,
-    TaskControlResponse, TaskRenderResponse,
+    SessionTaskResponse, SessionTasksResponse, SessionTranscriptResponse,
+    SessionWorkspaceEntryResponse, SessionWorkspaceFileResponse, SessionWorkspaceListResponse,
+    SkillCommandRequest, TaskControlResponse, TaskRenderResponse,
 };
-use agent_persistence::{AgentRepository, SessionRepository};
+use agent_persistence::{AgentRepository, ArtifactRepository, SessionRepository};
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeSearchInput, SessionReadInput, SessionSearchInput,
 };
+use agent_runtime::workspace::{WorkspaceEntryKind, WorkspaceRef};
+use std::collections::BTreeMap;
+use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::Method;
+
+const WEB_WORKSPACE_LIST_DEFAULT_LIMIT: usize = 100;
+const WEB_WORKSPACE_LIST_MAX_LIMIT: usize = 500;
+const WEB_FILE_READ_DEFAULT_MAX_BYTES: usize = 256 * 1024;
+const WEB_FILE_READ_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io::Result<()> {
     let mut body = String::new();
@@ -259,6 +269,34 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
         }
         (Method::Get, [session_id, artifacts, artifact_id]) if artifacts == "artifacts" => {
             handle_read_artifact(app, request, session_id.as_str(), artifact_id.as_str())
+        }
+        (Method::Get, [session_id, artifact_files]) if artifact_files == "artifact-files" => {
+            handle_list_artifact_files(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, artifact_files, artifact_id])
+            if artifact_files == "artifact-files" =>
+        {
+            handle_read_artifact_file(app, request, session_id.as_str(), artifact_id.as_str())
+        }
+        (Method::Get, [session_id, artifact_files, artifact_id, download])
+            if artifact_files == "artifact-files" && download == "download" =>
+        {
+            handle_download_artifact_file(app, request, session_id.as_str(), artifact_id.as_str())
+        }
+        (Method::Get, [session_id, workspace, action])
+            if workspace == "workspace" && action == "list" =>
+        {
+            handle_workspace_list(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, workspace, action])
+            if workspace == "workspace" && action == "read" =>
+        {
+            handle_workspace_read(app, request, session_id.as_str())
+        }
+        (Method::Get, [session_id, workspace, action])
+            if workspace == "workspace" && action == "download" =>
+        {
+            handle_workspace_download(app, request, session_id.as_str())
         }
         (Method::Get, [session_id, plan]) if plan == "plan" => {
             handle_render_plan(app, request, session_id.as_str())
@@ -571,6 +609,452 @@ fn handle_read_artifact(
             respond_json(request, status, &payload)
         }
     }
+}
+
+fn handle_list_artifact_files(
+    app: &App,
+    request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let store = match app.store() {
+        Ok(store) => store,
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            return respond_json(request, status, &payload);
+        }
+    };
+    match store.get_session(session_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return respond_json(
+                request,
+                StatusCode(404),
+                &ErrorResponse {
+                    error: format!("session {session_id} not found"),
+                },
+            );
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            return respond_json(request, status, &payload);
+        }
+    }
+
+    match store.list_artifacts_for_session(session_id) {
+        Ok(artifacts) => {
+            let response = SessionArtifactFilesResponse {
+                artifacts: artifacts
+                    .into_iter()
+                    .map(artifact_summary_response)
+                    .collect(),
+            };
+            respond_json(request, StatusCode(200), &response)
+        }
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(BootstrapError::Store(error));
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_read_artifact_file(
+    app: &App,
+    request: Request,
+    session_id: &str,
+    artifact_id: &str,
+) -> std::io::Result<()> {
+    let query = parse_query(request.url());
+    let max_bytes = query_map_usize(&query, "max_bytes")
+        .unwrap_or(WEB_FILE_READ_DEFAULT_MAX_BYTES)
+        .min(WEB_FILE_READ_MAX_BYTES);
+    match load_session_artifact(app, session_id, artifact_id) {
+        Ok(artifact) => {
+            let response = artifact_file_response(artifact, max_bytes);
+            respond_json(request, StatusCode(200), &response)
+        }
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_download_artifact_file(
+    app: &App,
+    request: Request,
+    session_id: &str,
+    artifact_id: &str,
+) -> std::io::Result<()> {
+    match load_session_artifact(app, session_id, artifact_id) {
+        Ok(artifact) => respond_download(
+            request,
+            artifact.bytes,
+            artifact_download_name(artifact.id.as_str(), artifact.path.as_path()),
+        ),
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_list(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    let query = parse_query(request.url());
+    let path = query.get("path").cloned().unwrap_or_default();
+    let recursive = query_bool(&query, "recursive").unwrap_or(false);
+    let limit = query_map_usize(&query, "limit")
+        .unwrap_or(WEB_WORKSPACE_LIST_DEFAULT_LIMIT)
+        .min(WEB_WORKSPACE_LIST_MAX_LIMIT);
+    let offset = query_map_usize(&query, "offset").unwrap_or(0);
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match workspace.list(path.as_str(), recursive) {
+            Ok(entries) => {
+                let total = entries.len();
+                let page = entries
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|entry| SessionWorkspaceEntryResponse {
+                        path: entry.path,
+                        kind: match entry.kind {
+                            WorkspaceEntryKind::File => "file".to_string(),
+                            WorkspaceEntryKind::Directory => "directory".to_string(),
+                        },
+                        bytes: entry.bytes,
+                    })
+                    .collect::<Vec<_>>();
+                let next_offset = (offset + page.len() < total).then_some(offset + page.len());
+                respond_json(
+                    request,
+                    StatusCode(200),
+                    &SessionWorkspaceListResponse {
+                        workspace_root: workspace.root.display().to_string(),
+                        path,
+                        entries: page,
+                        total,
+                        limit,
+                        offset,
+                        next_offset,
+                    },
+                )
+            }
+            Err(error) => respond_json(
+                request,
+                workspace_error_status(&error),
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            ),
+        },
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_read(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    let query = parse_query(request.url());
+    let path = query.get("path").cloned().unwrap_or_default();
+    let max_bytes = query_map_usize(&query, "max_bytes")
+        .unwrap_or(WEB_FILE_READ_DEFAULT_MAX_BYTES)
+        .min(WEB_FILE_READ_MAX_BYTES);
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match read_workspace_bytes(&workspace, path.as_str()) {
+            Ok(bytes) => {
+                let response = workspace_file_response(&workspace, path, bytes, max_bytes);
+                respond_json(request, StatusCode(200), &response)
+            }
+            Err((status, payload)) => respond_json(request, status, &payload),
+        },
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_download(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {
+    let query = parse_query(request.url());
+    let path = query.get("path").cloned().unwrap_or_default();
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match read_workspace_bytes(&workspace, path.as_str()) {
+            Ok(bytes) => respond_download(request, bytes, download_name_from_path(path.as_str())),
+            Err((status, payload)) => respond_json(request, status, &payload),
+        },
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn session_workspace(
+    app: &App,
+    session_id: &str,
+) -> Result<WorkspaceRef, (StatusCode, ErrorResponse)> {
+    let store = app.store().map_err(map_bootstrap_error)?;
+    let record = store
+        .get_session(session_id)
+        .map_err(|error| map_bootstrap_error(BootstrapError::Store(error)))?
+        .ok_or_else(|| {
+            (
+                StatusCode(404),
+                ErrorResponse {
+                    error: format!("session {session_id} not found"),
+                },
+            )
+        })?;
+    Ok(WorkspaceRef::new(record.workspace_root))
+}
+
+fn load_session_artifact(
+    app: &App,
+    session_id: &str,
+    artifact_id: &str,
+) -> Result<agent_persistence::ArtifactRecord, (StatusCode, ErrorResponse)> {
+    let store = app.store().map_err(map_bootstrap_error)?;
+    if !store
+        .session_exists(session_id)
+        .map_err(|error| map_bootstrap_error(BootstrapError::Store(error)))?
+    {
+        return Err((
+            StatusCode(404),
+            ErrorResponse {
+                error: format!("session {session_id} not found"),
+            },
+        ));
+    }
+    let artifact = store
+        .get_artifact(artifact_id)
+        .map_err(|error| map_bootstrap_error(BootstrapError::Store(error)))?
+        .ok_or_else(|| {
+            (
+                StatusCode(404),
+                ErrorResponse {
+                    error: format!("artifact {artifact_id} not found"),
+                },
+            )
+        })?;
+    if artifact.session_id != session_id {
+        return Err((
+            StatusCode(404),
+            ErrorResponse {
+                error: format!("artifact {artifact_id} not found in session {session_id}"),
+            },
+        ));
+    }
+    Ok(artifact)
+}
+
+fn read_workspace_bytes(
+    workspace: &WorkspaceRef,
+    path: &str,
+) -> Result<Vec<u8>, (StatusCode, ErrorResponse)> {
+    let resolved = workspace.resolve(path).map_err(|error| {
+        (
+            workspace_error_status(&error),
+            ErrorResponse {
+                error: error.to_string(),
+            },
+        )
+    })?;
+    let metadata = fs::metadata(&resolved).map_err(|source| {
+        (
+            StatusCode(404),
+            ErrorResponse {
+                error: format!(
+                    "workspace filesystem error at {}: {source}",
+                    resolved.display()
+                ),
+            },
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err((
+            StatusCode(400),
+            ErrorResponse {
+                error: "workspace path must point to a file".to_string(),
+            },
+        ));
+    }
+    fs::read(&resolved).map_err(|source| {
+        (
+            StatusCode(500),
+            ErrorResponse {
+                error: format!(
+                    "workspace filesystem error at {}: {source}",
+                    resolved.display()
+                ),
+            },
+        )
+    })
+}
+
+fn artifact_summary_response(
+    artifact: agent_persistence::ArtifactRecord,
+) -> SessionArtifactFileSummaryResponse {
+    SessionArtifactFileSummaryResponse {
+        id: artifact.id,
+        session_id: artifact.session_id,
+        kind: artifact.kind,
+        metadata_json: artifact.metadata_json,
+        path: artifact.path.display().to_string(),
+        byte_len: artifact.bytes.len(),
+        created_at: artifact.created_at,
+    }
+}
+
+fn artifact_file_response(
+    artifact: agent_persistence::ArtifactRecord,
+    max_bytes: usize,
+) -> SessionArtifactFileResponse {
+    let (content, content_truncated, text) = preview_text(artifact.bytes.as_slice(), max_bytes);
+    SessionArtifactFileResponse {
+        id: artifact.id,
+        session_id: artifact.session_id,
+        kind: artifact.kind,
+        metadata_json: artifact.metadata_json,
+        path: artifact.path.display().to_string(),
+        byte_len: artifact.bytes.len(),
+        created_at: artifact.created_at,
+        content,
+        content_truncated,
+        text,
+    }
+}
+
+fn workspace_file_response(
+    workspace: &WorkspaceRef,
+    path: String,
+    bytes: Vec<u8>,
+    max_bytes: usize,
+) -> SessionWorkspaceFileResponse {
+    let (content, content_truncated, text) = preview_text(bytes.as_slice(), max_bytes);
+    SessionWorkspaceFileResponse {
+        workspace_root: workspace.root.display().to_string(),
+        path,
+        byte_len: bytes.len() as u64,
+        content,
+        content_truncated,
+        text,
+    }
+}
+
+fn preview_text(bytes: &[u8], max_bytes: usize) -> (Option<String>, bool, bool) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => {
+            let mut selected_len = bytes.len().min(max_bytes);
+            while !text.is_char_boundary(selected_len) {
+                selected_len -= 1;
+            }
+            (
+                Some(text[..selected_len].to_string()),
+                bytes.len() > selected_len,
+                true,
+            )
+        }
+        Err(_) => (None, bytes.len() > max_bytes, false),
+    }
+}
+
+fn respond_download(request: Request, bytes: Vec<u8>, file_name: String) -> std::io::Result<()> {
+    let mut response = Response::from_data(bytes).with_status_code(StatusCode(200));
+    response.add_header(
+        Header::from_bytes("Content-Type", "application/octet-stream")
+            .map_err(|_| std::io::Error::other("invalid content type header"))?,
+    );
+    response.add_header(
+        Header::from_bytes(
+            "Content-Disposition",
+            format!(
+                "attachment; filename=\"{}\"",
+                header_safe_filename(file_name)
+            )
+            .as_bytes(),
+        )
+        .map_err(|_| std::io::Error::other("invalid content disposition header"))?,
+    );
+    request.respond(response)
+}
+
+fn workspace_error_status(error: &agent_runtime::workspace::WorkspaceError) -> StatusCode {
+    match error {
+        agent_runtime::workspace::WorkspaceError::InvalidPath { .. } => StatusCode(400),
+        agent_runtime::workspace::WorkspaceError::Io { .. } => StatusCode(500),
+    }
+}
+
+fn parse_query(url: &str) -> BTreeMap<String, String> {
+    let Some((_, query)) = url.split_once('?') else {
+        return BTreeMap::new();
+    };
+    query
+        .split('&')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=').unwrap_or((part, ""));
+            let key = percent_decode_query(key).ok()?;
+            let value = percent_decode_query(value).ok()?;
+            Some((key, value))
+        })
+        .collect()
+}
+
+fn percent_decode_query(input: &str) -> Result<String, ()> {
+    let mut bytes = Vec::with_capacity(input.len());
+    let input_bytes = input.as_bytes();
+    let mut index = 0;
+    while index < input_bytes.len() {
+        match input_bytes[index] {
+            b'+' => {
+                bytes.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < input_bytes.len() => {
+                let high = hex_value(input_bytes[index + 1]).ok_or(())?;
+                let low = hex_value(input_bytes[index + 2]).ok_or(())?;
+                bytes.push((high << 4) | low);
+                index += 3;
+            }
+            value => {
+                bytes.push(value);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(bytes).map_err(|_| ())
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn query_map_usize(query: &BTreeMap<String, String>, key: &str) -> Option<usize> {
+    query.get(key).and_then(|value| value.parse::<usize>().ok())
+}
+
+fn query_bool(query: &BTreeMap<String, String>, key: &str) -> Option<bool> {
+    query.get(key).and_then(|value| match value.as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    })
+}
+
+fn download_name_from_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "workspace-file.bin".to_string())
+}
+
+fn artifact_download_name(artifact_id: &str, path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("{artifact_id}.bin"))
+}
+
+fn header_safe_filename(file_name: String) -> String {
+    file_name
+        .chars()
+        .map(|value| match value {
+            '"' | '\\' | '\r' | '\n' => '_',
+            _ => value,
+        })
+        .collect()
 }
 
 fn handle_render_active_run(app: &App, request: Request, session_id: &str) -> std::io::Result<()> {

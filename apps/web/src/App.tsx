@@ -6,6 +6,7 @@ import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { CreateSessionDialog } from "./components/CreateSessionDialog";
 import { AgentsTable } from "./features/agents/AgentsTable";
 import { ChatScreen } from "./features/chat/ChatScreen";
+import { FilesScreen } from "./features/files/FilesScreen";
 import { OverviewScreen } from "./features/overview/OverviewScreen";
 import { RoutesView } from "./features/routes/RoutesView";
 import { SessionsScreen } from "./features/sessions/SessionsScreen";
@@ -255,6 +256,10 @@ export function App() {
       setSection("tools");
       return;
     }
+    if (command.id === "open-files") {
+      setSection("files");
+      return;
+    }
     if (command.id === "open-debug") {
       setSection("sessions");
       return;
@@ -268,7 +273,7 @@ export function App() {
       return;
     }
     if (command.id === "send-help") {
-      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /tools, /debug.");
+      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /tools, /debug.");
       return;
     }
     if (!selectedSessionId) {
@@ -484,6 +489,8 @@ export function App() {
             onCancelAll={() => void cancelRun(true)}
           />
         );
+      case "files":
+        return <FilesScreen selectedSession={selectedSession} />;
       case "agents":
         return (
           <>
