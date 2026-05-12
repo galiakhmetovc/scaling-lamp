@@ -96,6 +96,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/agents/open") => {
             agents::handle_open_agent_home(app, request)
         }
+        _ if request.url().starts_with("/v1/agents/") => {
+            agents::handle_agent_nested_routes(app, request)
+        }
         (&tiny_http::Method::Get, "/v1/agent-schedules") => {
             agents::handle_list_agent_schedules(app, request)
         }

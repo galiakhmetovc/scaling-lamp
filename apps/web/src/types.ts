@@ -39,6 +39,38 @@ export type AgentSummary = {
   updated_at: number;
 };
 
+export type AgentFileEntry = {
+  path: string;
+  kind: string;
+  byte_len: number;
+};
+
+export type AgentFiles = {
+  agent_id: string;
+  agent_name: string;
+  agent_home: string;
+  files: AgentFileEntry[];
+};
+
+export type AgentFile = {
+  agent_id: string;
+  agent_home: string;
+  path: string;
+  kind: string;
+  byte_len: number;
+  content: string;
+};
+
+export type AgentFileWriteResult = {
+  agent_id: string;
+  agent_home: string;
+  path: string;
+  kind: string;
+  bytes_written: number;
+  created: boolean;
+  overwritten: boolean;
+};
+
 export type SessionSummary = {
   id: string;
   title: string;

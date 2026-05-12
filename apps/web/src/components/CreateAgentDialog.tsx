@@ -37,7 +37,7 @@ export function CreateAgentDialog({
             </Select>
           </FormControl>
           <Alert severity="info">
-            Создание идёт через `/v1/agents`. Редактирование файлов профиля и skills будет добавлено отдельными endpoints, чтобы не делать второй runtime.
+            Создание идёт через `/v1/agents`. После создания SYSTEM.md, AGENTS.md и skills доступны на вкладке Skills.
           </Alert>
         </Stack>
       </DialogContent>

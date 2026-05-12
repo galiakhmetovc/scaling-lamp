@@ -416,6 +416,49 @@ pub struct AgentCreateRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFileEntryResponse {
+    pub path: String,
+    pub kind: String,
+    pub byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFilesResponse {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub agent_home: String,
+    pub files: Vec<AgentFileEntryResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFileReadResponse {
+    pub agent_id: String,
+    pub agent_home: String,
+    pub path: String,
+    pub kind: String,
+    pub byte_len: u64,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFileWriteRequest {
+    pub path: String,
+    pub content: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFileWriteResponse {
+    pub agent_id: String,
+    pub agent_home: String,
+    pub path: String,
+    pub kind: String,
+    pub bytes_written: usize,
+    pub created: bool,
+    pub overwritten: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentResolveRequest {
     pub identifier: Option<String>,
 }

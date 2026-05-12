@@ -1,4 +1,7 @@
 import type {
+  AgentFile,
+  AgentFiles,
+  AgentFileWriteResult,
   ArtifactFile,
   ArtifactFileSummary,
   PendingApproval,
@@ -81,6 +84,21 @@ export const api = {
         name,
         template_identifier: templateIdentifier || null
       })
+    });
+  },
+  agentFiles(agentId: string, signal?: AbortSignal) {
+    return requestJson<AgentFiles>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}/files`), { signal });
+  },
+  agentFileRead(agentId: string, path: string, signal?: AbortSignal) {
+    return requestJson<AgentFile>(
+      endpoint(`/v1/agents/${encodeURIComponent(agentId)}/files/read${queryString({ path })}`),
+      { signal }
+    );
+  },
+  agentFileWrite(agentId: string, path: string, content: string, mode: "create" | "overwrite" | "upsert") {
+    return requestJson<AgentFileWriteResult>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}/files/write`), {
+      method: "POST",
+      body: JSON.stringify({ path, content, mode })
     });
   },
   transcript(sessionId: string, limit = 160, signal?: AbortSignal) {

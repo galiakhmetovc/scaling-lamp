@@ -16,13 +16,14 @@ use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
     A2ACallbackTargetRequest, A2ADelegationAcceptedResponse, A2ADelegationCompletionOutcomeRequest,
-    A2ADelegationCompletionRequest, A2ADelegationCreateRequest, CreateSessionRequest,
-    DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
-    McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
-    MemoryRenderResponse, SessionArtifactFileResponse, SessionArtifactFilesResponse,
-    SessionBackgroundJobResponse, SessionDebugResponse, SessionSummaryResponse,
-    SessionWorkspaceFileResponse, SessionWorkspaceListResponse, SkillCommandRequest,
-    StatusResponse, TaskControlResponse, TaskRenderResponse,
+    A2ADelegationCompletionRequest, A2ADelegationCreateRequest, AgentFileReadResponse,
+    AgentFileWriteResponse, AgentFilesResponse, CreateSessionRequest, DaemonStopResponse,
+    DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse, McpConnectorCreateRequest,
+    McpConnectorDetailResponse, McpConnectorUpdateRequest, MemoryRenderResponse,
+    SessionArtifactFileResponse, SessionArtifactFilesResponse, SessionBackgroundJobResponse,
+    SessionDebugResponse, SessionSummaryResponse, SessionWorkspaceFileResponse,
+    SessionWorkspaceListResponse, SkillCommandRequest, StatusResponse, TaskControlResponse,
+    TaskRenderResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -107,6 +108,87 @@ fn daemon_http_requires_bearer_token_when_configured() {
         .expect("authorized response");
 
     assert_eq!(authorized.status(), StatusCode::OK);
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_can_manage_agent_profile_files() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let list_response = client
+        .get(format!("{base_url}/v1/agents/default/files"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("agent files list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list: AgentFilesResponse = list_response.json().expect("agent files json");
+    assert_eq!(list.agent_id, "default");
+    assert!(list.files.iter().any(|file| file.path == "SYSTEM.md"));
+    assert!(list.files.iter().any(|file| file.path == "AGENTS.md"));
+
+    let read_response = client
+        .get(format!(
+            "{base_url}/v1/agents/default/files/read?path=SYSTEM.md"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("agent file read response");
+    assert_eq!(read_response.status(), StatusCode::OK);
+    let read: AgentFileReadResponse = read_response.json().expect("agent file read json");
+    assert_eq!(read.path, "SYSTEM.md");
+    assert!(!read.content.is_empty());
+
+    let write_response = client
+        .post(format!("{base_url}/v1/agents/default/files/write"))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({
+            "path": "SYSTEM.md",
+            "content": "# Test system\n",
+            "mode": "overwrite"
+        }))
+        .send()
+        .expect("agent file write response");
+    assert_eq!(write_response.status(), StatusCode::OK);
+    let written: AgentFileWriteResponse = write_response.json().expect("agent write json");
+    assert_eq!(written.path, "SYSTEM.md");
+    assert!(written.overwritten);
+
+    let reread_response = client
+        .get(format!(
+            "{base_url}/v1/agents/default/files/read?path=SYSTEM.md"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("agent file reread response");
+    let reread: AgentFileReadResponse = reread_response.json().expect("agent file reread json");
+    assert_eq!(reread.content, "# Test system\n");
+
+    let skill_response = client
+        .post(format!("{base_url}/v1/agents/default/files/write"))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({
+            "path": "skills/web-test/SKILL.md",
+            "content": "---\nname: web-test\ndescription: Test skill\n---\n\n# Web test\n",
+            "mode": "create"
+        }))
+        .send()
+        .expect("agent skill write response");
+    assert_eq!(skill_response.status(), StatusCode::OK);
+
+    let invalid_response = client
+        .post(format!("{base_url}/v1/agents/default/files/write"))
+        .bearer_auth("secret-token")
+        .json(&serde_json::json!({
+            "path": "../escape.md",
+            "content": "no\n",
+            "mode": "upsert"
+        }))
+        .send()
+        .expect("invalid agent file write response");
+    assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
 
     handle.stop().expect("stop daemon");
 }

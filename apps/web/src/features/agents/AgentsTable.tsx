@@ -8,7 +8,7 @@ export function AgentsTable({ agents, onCreate }: { agents: AgentSummary[]; onCr
     <Stack spacing={1.5}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Typography variant="body2" color="text.secondary">
-          Сейчас доступны создание профиля и просмотр workspace. Редактирование SYSTEM/AGENTS/skills будет отдельным API поверх agentd.
+          Создание профиля идёт через `/v1/agents`; SYSTEM.md, AGENTS.md и SKILL.md редактируются на вкладке Skills.
         </Typography>
         <Button variant="contained" onClick={onCreate}>
           Создать агента

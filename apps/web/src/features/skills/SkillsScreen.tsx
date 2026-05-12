@@ -1,33 +1,25 @@
 import {
   Alert,
+  Box,
   Button,
   Chip,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
+  Tab,
+  Tabs,
   Typography
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { EmptyState, SectionHeader } from "../../components/common";
 import type { SessionSkillStatus, SessionSummary } from "../../types";
+import { AgentProfileFilesEditor } from "./AgentProfileFilesEditor";
+import { SkillModesTable } from "./SkillModesTable";
 
-function modeColor(mode: string): "success" | "warning" | "default" {
-  if (mode === "automatic" || mode === "manual") {
-    return "success";
-  }
-  if (mode === "disabled") {
-    return "warning";
-  }
-  return "default";
-}
+type SkillsTab = "activation" | "files";
 
 export function SkillsScreen({ selectedSession }: { selectedSession: SessionSummary | null }) {
+  const [tab, setTab] = useState<SkillsTab>("activation");
   const [skills, setSkills] = useState<SessionSkillStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +66,7 @@ export function SkillsScreen({ selectedSession }: { selectedSession: SessionSumm
     <Stack spacing={2}>
       <SectionHeader
         title="Skills"
-        subtitle="Навыки выбранной сессии: automatic активируется по триггерам, manual включён вручную, disabled выключен."
+        subtitle="Активация skills в выбранной сессии и редактирование файлов профиля агента через canonical agentd API."
         action={
           <Button variant="outlined" disabled={loading || !selectedSession} onClick={() => void load()}>
             Обновить
@@ -86,61 +78,30 @@ export function SkillsScreen({ selectedSession }: { selectedSession: SessionSumm
           <Paper variant="outlined" sx={{ p: 1.5 }}>
             <Typography variant="h6">{selectedSession.title || selectedSession.id}</Typography>
             <Typography variant="caption" color="text.secondary" className="mono">
-              {selectedSession.id} · {selectedSession.agent_name}
+              {selectedSession.id} · {selectedSession.agent_name} · profile={selectedSession.agent_profile_id}
             </Typography>
           </Paper>
           {error ? <Alert severity="error">{error}</Alert> : null}
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Skill</TableCell>
-                  <TableCell>Описание</TableCell>
-                  <TableCell>Mode</TableCell>
-                  <TableCell align="right">Действия</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {skills.map((skill) => (
-                  <TableRow key={skill.name} hover>
-                    <TableCell className="mono">{skill.name}</TableCell>
-                    <TableCell>{skill.description}</TableCell>
-                    <TableCell>
-                      <Chip label={skill.mode} color={modeColor(skill.mode)} variant="outlined" />
-                    </TableCell>
-                    <TableCell align="right">
-                      <Stack direction="row" spacing={1} justifyContent="flex-end">
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          disabled={loading || skill.mode === "manual"}
-                          onClick={() => void setSkillEnabled(skill.name, true)}
-                        >
-                          Enable
-                        </Button>
-                        <Button
-                          size="small"
-                          color="warning"
-                          variant="outlined"
-                          disabled={loading || skill.mode === "disabled"}
-                          onClick={() => void setSkillEnabled(skill.name, false)}
-                        >
-                          Disable
-                        </Button>
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {!loading && skills.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4}>
-                      <EmptyState title="Skills не найдены" detail="Для выбранной сессии каталог навыков пуст или недоступен." />
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Chip label={`skills: ${skills.length}`} variant="outlined" />
+            <Chip label={`agent: ${selectedSession.agent_profile_id}`} color="primary" variant="outlined" />
+          </Stack>
+          <Paper variant="outlined">
+            <Tabs value={tab} onChange={(_, value: SkillsTab) => setTab(value)} variant="scrollable" scrollButtons="auto">
+              <Tab value="activation" label="Активация" />
+              <Tab value="files" label="Файлы профиля" />
+            </Tabs>
+          </Paper>
+          <Box>
+            {tab === "activation" ? (
+              <SkillModesTable
+                skills={skills}
+                loading={loading}
+                onSetEnabled={(name, enabled) => void setSkillEnabled(name, enabled)}
+              />
+            ) : null}
+            {tab === "files" ? <AgentProfileFilesEditor agentId={selectedSession.agent_profile_id} /> : null}
+          </Box>
         </>
       ) : (
         <EmptyState title="Сессия не выбрана" detail="Выбери сессию, чтобы увидеть её skills и режимы активации." />
