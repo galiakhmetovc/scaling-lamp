@@ -47,13 +47,27 @@ use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, DeliverFileInput, DeliverFileOutput, EditTaskOutput,
     FileDeliveryTarget, InitPlanOutput, PlanLintOutput, PlanReadOutput, PlanSnapshotOutput,
     PlanWriteOutput, PromptBudgetLayerOutput, PromptBudgetReadOutput, PromptBudgetUpdateOutput,
-    PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput, SkillListOutput,
-    SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolName, ToolOutput, ToolRuntime,
+    PromptBudgetUpdateScope, SetTaskStatusOutput, SkillActivationOutput, SkillInstallOutput,
+    SkillListOutput, SkillReadOutput, SkillStatusOutput, ToolCatalog, ToolName, ToolOutput,
+    ToolRuntime,
 };
 use agent_runtime::workspace::WorkspaceRef;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SkillInstallCopyStats {
+    files: usize,
+    bytes: u64,
+}
+
+fn invalid_skill_tool(reason: impl Into<String>) -> ExecutionError {
+    ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool {
+        reason: reason.into(),
+    })
+}
 
 #[cfg(unix)]
 fn signal_process(pid: libc::pid_t, signal: libc::c_int) -> std::io::Result<bool> {
@@ -753,6 +767,134 @@ impl ExecutionService {
         }
     }
 
+    fn validate_skill_install_name(name: &str) -> Result<String, ExecutionError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(invalid_skill_tool("skill name must not be empty"));
+        }
+        if trimmed.starts_with('.') {
+            return Err(invalid_skill_tool("skill name must not start with dot"));
+        }
+        if trimmed.contains("..") {
+            return Err(invalid_skill_tool("skill name must not contain '..'"));
+        }
+        if !trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        {
+            return Err(invalid_skill_tool(
+                "skill name may contain only ASCII letters, digits, dash, underscore, and dot",
+            ));
+        }
+        Ok(trimmed.to_string())
+    }
+
+    fn copy_skill_directory_checked(
+        source: &Path,
+        destination: &Path,
+        max_files: usize,
+        max_bytes: usize,
+    ) -> Result<SkillInstallCopyStats, ExecutionError> {
+        let mut stats = SkillInstallCopyStats::default();
+        Self::copy_skill_directory_entry(source, destination, max_files, max_bytes, &mut stats)?;
+        Ok(stats)
+    }
+
+    fn copy_skill_directory_entry(
+        source: &Path,
+        destination: &Path,
+        max_files: usize,
+        max_bytes: usize,
+        stats: &mut SkillInstallCopyStats,
+    ) -> Result<(), ExecutionError> {
+        let metadata = fs::symlink_metadata(source).map_err(|source_error| {
+            invalid_skill_tool(format!(
+                "failed to read skill source {}: {source_error}",
+                source.display()
+            ))
+        })?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Err(invalid_skill_tool(format!(
+                "skill source must not contain symlinks: {}",
+                source.display()
+            )));
+        }
+
+        if file_type.is_dir() {
+            fs::create_dir_all(destination).map_err(|source_error| {
+                invalid_skill_tool(format!(
+                    "failed to create skill destination {}: {source_error}",
+                    destination.display()
+                ))
+            })?;
+            let mut entries = fs::read_dir(source)
+                .map_err(|source_error| {
+                    invalid_skill_tool(format!(
+                        "failed to list skill source {}: {source_error}",
+                        source.display()
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|source_error| {
+                    invalid_skill_tool(format!(
+                        "failed to read skill source entry in {}: {source_error}",
+                        source.display()
+                    ))
+                })?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let file_name = entry.file_name();
+                Self::copy_skill_directory_entry(
+                    entry.path().as_path(),
+                    destination.join(file_name).as_path(),
+                    max_files,
+                    max_bytes,
+                    stats,
+                )?;
+            }
+            return Ok(());
+        }
+
+        if !file_type.is_file() {
+            return Err(invalid_skill_tool(format!(
+                "skill source must contain only regular files and directories: {}",
+                source.display()
+            )));
+        }
+
+        if stats.files >= max_files {
+            return Err(invalid_skill_tool(format!(
+                "skill directory has too many files; max is {max_files}"
+            )));
+        }
+        let next_bytes = stats.bytes.saturating_add(metadata.len());
+        let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+        if next_bytes > max_bytes_u64 {
+            return Err(invalid_skill_tool(format!(
+                "skill directory is too large; max is {max_bytes} bytes"
+            )));
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|source_error| {
+                invalid_skill_tool(format!(
+                    "failed to create skill destination {}: {source_error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::copy(source, destination).map_err(|source_error| {
+            invalid_skill_tool(format!(
+                "failed to copy skill file {} to {}: {source_error}",
+                source.display(),
+                destination.display()
+            ))
+        })?;
+        stats.files += 1;
+        stats.bytes = next_bytes;
+        Ok(())
+    }
+
     fn find_skill_entry<'a>(
         catalog: &'a SkillCatalog,
         skill_name: &str,
@@ -916,6 +1058,178 @@ impl ExecutionService {
         Ok(SkillActivationOutput {
             session_id: session.id,
             name: entry.name.clone(),
+            mode,
+            skills,
+        })
+    }
+
+    fn install_session_skill_for_tool(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &agent_runtime::tool::SkillInstallInput,
+        now: i64,
+    ) -> Result<SkillInstallOutput, ExecutionError> {
+        let mut session = Session::try_from(
+            store
+                .get_session(session_id)
+                .map_err(ExecutionError::Store)?
+                .ok_or_else(|| ExecutionError::MissingSession {
+                    id: session_id.to_string(),
+                })?,
+        )
+        .map_err(ExecutionError::RecordConversion)?;
+
+        let workspace = WorkspaceRef::new(&session.workspace_root);
+        let source_dir = workspace
+            .resolve(&input.source_dir)
+            .map_err(|source| invalid_skill_tool(source.to_string()))?;
+        let workspace_root = fs::canonicalize(&workspace.root).map_err(|source| {
+            invalid_skill_tool(format!(
+                "failed to canonicalize workspace root {}: {source}",
+                workspace.root.display()
+            ))
+        })?;
+        let source_dir = fs::canonicalize(&source_dir).map_err(|source| {
+            invalid_skill_tool(format!(
+                "failed to canonicalize source_dir {}: {source}",
+                source_dir.display()
+            ))
+        })?;
+        if !source_dir.starts_with(&workspace_root) {
+            return Err(invalid_skill_tool(
+                "source_dir must stay inside the session workspace",
+            ));
+        }
+        let source_metadata = fs::symlink_metadata(&source_dir).map_err(|source| {
+            invalid_skill_tool(format!(
+                "failed to read source_dir {}: {source}",
+                source_dir.display()
+            ))
+        })?;
+        if source_metadata.file_type().is_symlink() {
+            return Err(invalid_skill_tool(
+                "source_dir must be a real directory, not a symlink",
+            ));
+        }
+        if !source_metadata.is_dir() {
+            return Err(invalid_skill_tool(
+                "source_dir must be a directory containing SKILL.md",
+            ));
+        }
+
+        let source_skill_md_path = source_dir.join("SKILL.md");
+        let source_skill_md = fs::read_to_string(&source_skill_md_path).map_err(|source| {
+            invalid_skill_tool(format!(
+                "failed to read {}: {source}",
+                source_skill_md_path.display()
+            ))
+        })?;
+        let document = parse_skill_document(&source_skill_md_path, &source_skill_md)
+            .map_err(invalid_skill_tool)?;
+        let skill_name = Self::validate_skill_install_name(&document.frontmatter.name)?;
+        if let Some(expected_name) = input.name.as_deref() {
+            let expected_name = Self::validate_skill_install_name(expected_name)?;
+            if expected_name != skill_name {
+                return Err(invalid_skill_tool(format!(
+                    "requested skill name {expected_name} does not match SKILL.md frontmatter name {skill_name}"
+                )));
+            }
+        }
+
+        let agent_skills_dir =
+            agents::agent_home(&self.config.data_dir, &session.agent_profile_id).join("skills");
+        fs::create_dir_all(&agent_skills_dir).map_err(|source| {
+            invalid_skill_tool(format!(
+                "failed to create agent skills directory {}: {source}",
+                agent_skills_dir.display()
+            ))
+        })?;
+        let destination_dir = agent_skills_dir.join(&skill_name);
+        let overwritten = destination_dir.exists();
+        if fs::symlink_metadata(&destination_dir)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(invalid_skill_tool(format!(
+                "refusing to overwrite symlinked skill directory {}",
+                destination_dir.display()
+            )));
+        }
+        if overwritten && !input.overwrite.unwrap_or(false) {
+            return Err(invalid_skill_tool(format!(
+                "skill {skill_name} already exists; pass overwrite=true to replace it"
+            )));
+        }
+        let temp_dir = agent_skills_dir.join(format!(".install-{skill_name}-{now}"));
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir).map_err(|source| {
+                invalid_skill_tool(format!(
+                    "failed to remove stale temp skill directory {}: {source}",
+                    temp_dir.display()
+                ))
+            })?;
+        }
+        let copy_result = Self::copy_skill_directory_checked(
+            &source_dir,
+            &temp_dir,
+            self.config.runtime_limits.skill_install_max_files,
+            self.config.runtime_limits.skill_install_max_bytes,
+        );
+        let stats = match copy_result {
+            Ok(stats) => stats,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                return Err(error);
+            }
+        };
+        if overwritten {
+            fs::remove_dir_all(&destination_dir).map_err(|source| {
+                let _ = fs::remove_dir_all(&temp_dir);
+                invalid_skill_tool(format!(
+                    "failed to remove existing skill directory {}: {source}",
+                    destination_dir.display()
+                ))
+            })?;
+        }
+        fs::rename(&temp_dir, &destination_dir).map_err(|source| {
+            let _ = fs::remove_dir_all(&temp_dir);
+            invalid_skill_tool(format!(
+                "failed to install skill into {}: {source}",
+                destination_dir.display()
+            ))
+        })?;
+
+        let enabled = input.enable.unwrap_or(true);
+        if enabled {
+            session.settings.enable_skill(&skill_name);
+        }
+        session.updated_at = now;
+        let record = agent_persistence::SessionRecord::try_from(&session)
+            .map_err(ExecutionError::RecordConversion)?;
+        store.put_session(&record).map_err(ExecutionError::Store)?;
+
+        let catalog = self.skill_catalog_for_agent(&session.agent_profile_id)?;
+        let installed_entry = Self::find_skill_entry(&catalog, &skill_name)?;
+        let statuses = self.session_skill_statuses(store, &session, &catalog)?;
+        let skills = self.skill_status_outputs(&catalog, &statuses, true);
+        let mode = statuses
+            .iter()
+            .find(|status| status.name.eq_ignore_ascii_case(&skill_name))
+            .map(|status| Self::skill_mode_string(status.mode))
+            .unwrap_or("inactive")
+            .to_string();
+        Ok(SkillInstallOutput {
+            session_id: session.id,
+            name: installed_entry.name.clone(),
+            description: installed_entry.description.clone(),
+            source_dir: input.source_dir.clone(),
+            skill_dir: installed_entry.skill_dir.display().to_string(),
+            skill_md_path: installed_entry.skill_md_path.display().to_string(),
+            installed_files: stats.files,
+            installed_bytes: stats.bytes,
+            overwritten,
+            enabled,
             mode,
             skills,
         })
@@ -2130,6 +2444,9 @@ impl ExecutionService {
             )),
             ToolCall::SkillDisable(input) => Ok(ToolOutput::SkillDisable(
                 self.update_session_skill_for_tool(store, session_id, input, false, now)?,
+            )),
+            ToolCall::SkillInstall(input) => Ok(ToolOutput::SkillInstall(
+                self.install_session_skill_for_tool(store, session_id, input, now)?,
             )),
             ToolCall::ArtifactRead(input) => Ok(ToolOutput::ArtifactRead(
                 self.read_context_offload_artifact(store, session_id, input)?,

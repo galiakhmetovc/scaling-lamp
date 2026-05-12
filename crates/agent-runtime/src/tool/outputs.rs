@@ -331,6 +331,22 @@ pub struct SkillActivationOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillInstallOutput {
+    pub session_id: String,
+    pub name: String,
+    pub description: String,
+    pub source_dir: String,
+    pub skill_dir: String,
+    pub skill_md_path: String,
+    pub installed_files: usize,
+    pub installed_bytes: u64,
+    pub overwritten: bool,
+    pub enabled: bool,
+    pub mode: String,
+    pub skills: Vec<SkillStatusOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomyJobOutput {
     pub id: String,
     pub kind: String,
@@ -924,6 +940,7 @@ pub enum ToolOutput {
     SkillRead(SkillReadOutput),
     SkillEnable(SkillActivationOutput),
     SkillDisable(SkillActivationOutput),
+    SkillInstall(SkillInstallOutput),
     ArtifactRead(ArtifactReadOutput),
     ArtifactSearch(ArtifactSearchOutput),
     ArtifactPin(ArtifactPinOutput),
@@ -1377,6 +1394,14 @@ impl ToolOutput {
             Self::SkillDisable(output) => {
                 format!("skill_disable name={} mode={}", output.name, output.mode)
             }
+            Self::SkillInstall(output) => format!(
+                "skill_install name={} enabled={} mode={} installed_files={} overwritten={}",
+                output.name,
+                output.enabled,
+                output.mode,
+                output.installed_files,
+                output.overwritten
+            ),
             Self::ArtifactRead(output) => {
                 format!(
                     "artifact_read artifact_id={} offset={} bytes={}/{} truncated={}",
@@ -1954,6 +1979,22 @@ impl ToolOutput {
                 "tool": "skill_disable",
                 "session_id": output.session_id,
                 "name": output.name,
+                "mode": output.mode,
+                "skills": output.skills.iter().map(skill_status_json).collect::<Vec<_>>(),
+            })
+            .to_string(),
+            Self::SkillInstall(output) => json!({
+                "tool": "skill_install",
+                "session_id": output.session_id,
+                "name": output.name,
+                "description": output.description,
+                "source_dir": output.source_dir,
+                "skill_dir": output.skill_dir,
+                "skill_md_path": output.skill_md_path,
+                "installed_files": output.installed_files,
+                "installed_bytes": output.installed_bytes,
+                "overwritten": output.overwritten,
+                "enabled": output.enabled,
                 "mode": output.mode,
                 "skills": output.skills.iter().map(skill_status_json).collect::<Vec<_>>(),
             })

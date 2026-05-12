@@ -903,6 +903,37 @@ skill_disable({ name: string })
 - если auto-activation мешает текущей задаче;
 - если пользователь явно просит не использовать конкретный skill в этой session.
 
+### `skill_install`
+
+Сигнатура:
+
+```text
+skill_install({
+  source_dir: string,
+  name?: string | null,
+  enable?: boolean | null,
+  overwrite?: boolean | null
+})
+```
+
+Что делает:
+
+- устанавливает complete skill directory из workspace текущей session в `agent_home/skills/<name>/`;
+- `source_dir` должен быть относительным путём к папке, а не к файлу `SKILL.md`;
+- папка обязана содержать валидный `SKILL.md` с frontmatter `name` и `description`;
+- копирует всю директорию, включая `references/`, `assets/` и другие обычные файлы;
+- отклоняет symlink и special files;
+- ограничивает размер через `runtime_limits.skill_install_max_files` и `runtime_limits.skill_install_max_bytes`;
+- `name`, если указан, работает как guard: должен совпасть с `name` из frontmatter;
+- `enable` по умолчанию `true`, поэтому skill сразу становится manual-active в текущей session;
+- `overwrite` по умолчанию `false`, чтобы агент случайно не затёр существующий skill.
+
+Когда использовать:
+
+- если агент написал новый skill в workspace и хочет начать применять его в текущей session;
+- если пользователь просит “активировать” новый skill, созданный агентом;
+- после установки лучше вызвать `skill_read` или явно сообщить пользователю, какой skill установлен и включён.
+
 ## Offload
 
 ### `artifact_read`

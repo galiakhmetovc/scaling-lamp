@@ -184,6 +184,8 @@ teamdctl session disable-skill <session_id> <skill_name>
 - automatic activation сравнивает tokens из `skill.name`/`skill.description` с title и последними user messages;
 - полный `SKILL.md` агент читает через `skill_read`, если prompt excerpt недостаточен.
 
+Если агент написал новый skill в своём workspace, runtime сам его не подхватывает. Нужно установить целую папку skill через `skill_install({ source_dir: "skills/<name>" })`; `source_dir` указывает на директорию с `SKILL.md`, а не на сам файл. После установки runtime копирует папку в `agent_home/skills/<name>/` и по умолчанию включает skill для текущей session.
+
 Минимальный набор:
 
 ```bash

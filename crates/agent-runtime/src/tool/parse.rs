@@ -126,6 +126,7 @@ impl ToolCall {
             Self::SkillRead(_) => ToolName::SkillRead,
             Self::SkillEnable(_) => ToolName::SkillEnable,
             Self::SkillDisable(_) => ToolName::SkillDisable,
+            Self::SkillInstall(_) => ToolName::SkillInstall,
             Self::ArtifactRead(_) => ToolName::ArtifactRead,
             Self::ArtifactSearch(_) => ToolName::ArtifactSearch,
             Self::ArtifactPin(_) => ToolName::ArtifactPin,
@@ -215,6 +216,7 @@ impl ToolCall {
             | Self::SkillRead(_)
             | Self::SkillEnable(_)
             | Self::SkillDisable(_)
+            | Self::SkillInstall(_)
             | Self::DeliverFile(_)
             | Self::MemoryAdd(_)
             | Self::MemorySearch(_)
@@ -470,6 +472,13 @@ impl ToolCall {
             ),
             Self::SkillEnable(input) => format!("skill_enable name={}", input.name),
             Self::SkillDisable(input) => format!("skill_disable name={}", input.name),
+            Self::SkillInstall(input) => format!(
+                "skill_install source_dir={} name={} enable={} overwrite={}",
+                input.source_dir,
+                input.name.as_deref().unwrap_or("<from SKILL.md>"),
+                input.enable.unwrap_or(true),
+                input.overwrite.unwrap_or(false)
+            ),
             Self::ArtifactRead(input) => format!("artifact_read artifact_id={}", input.artifact_id),
             Self::ArtifactSearch(input) => {
                 format!(
@@ -949,6 +958,12 @@ impl ToolCall {
                 }),
             "skill_disable" => serde_json::from_str(arguments)
                 .map(Self::SkillDisable)
+                .map_err(|source| ToolCallParseError::InvalidArguments {
+                    name: name.to_string(),
+                    source,
+                }),
+            "skill_install" => serde_json::from_str(arguments)
+                .map(Self::SkillInstall)
                 .map_err(|source| ToolCallParseError::InvalidArguments {
                     name: name.to_string(),
                     source,

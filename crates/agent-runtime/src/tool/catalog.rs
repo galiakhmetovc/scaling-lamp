@@ -88,6 +88,7 @@ impl ToolCatalog {
                         | ToolName::SkillRead
                         | ToolName::SkillEnable
                         | ToolName::SkillDisable
+                        | ToolName::SkillInstall
                         | ToolName::ArtifactRead
                         | ToolName::ArtifactSearch
                         | ToolName::ArtifactPin
@@ -603,6 +604,16 @@ impl ToolCatalog {
                 name: ToolName::SkillDisable,
                 family: ToolFamily::Memory,
                 description: "Manually disable one skill for the current session. This changes session settings only; use when an automatic skill is distracting or wrong.",
+                policy: ToolPolicy {
+                    read_only: false,
+                    destructive: false,
+                    requires_approval: false,
+                },
+            },
+            ToolDefinition {
+                name: ToolName::SkillInstall,
+                family: ToolFamily::Memory,
+                description: "Install a complete skill directory from the current workspace into the current agent profile. source_dir must be a relative workspace directory containing SKILL.md. The runtime validates SKILL.md frontmatter, copies the whole directory to agent_home/skills/<name>, and enables it for the current session by default.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,

@@ -1784,6 +1784,125 @@ fn execute_chat_turn_can_list_read_and_enable_skills_with_tools() {
 }
 
 #[test]
+fn execute_chat_turn_can_install_workspace_skill_directory() {
+    let (api_base, requests, handle) = spawn_json_server_sequence(vec![
+        r#"{
+                "id":"resp_skill_install_1",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"fc_skill_install",
+                        "type":"function_call",
+                        "call_id":"call_skill_install",
+                        "name":"skill_install",
+                        "arguments":"{\"source_dir\":\"skills/daily-note\",\"enable\":true}"
+                    }
+                ],
+                "usage":{"input_tokens":30,"output_tokens":10,"total_tokens":40}
+            }"#
+        .to_string(),
+        r#"{
+                "id":"resp_skill_install_2",
+                "model":"gpt-5.4",
+                "output":[
+                    {
+                        "id":"msg_skill_install",
+                        "type":"message",
+                        "status":"completed",
+                        "role":"assistant",
+                        "content":[
+                            {
+                                "type":"output_text",
+                                "text":"Skill installed and enabled."
+                            }
+                        ]
+                    }
+                ],
+                "usage":{"input_tokens":24,"output_tokens":6,"total_tokens":30}
+            }"#
+        .to_string(),
+    ]);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let source_dir = workspace.join("skills/daily-note");
+    fs::create_dir_all(source_dir.join("references")).expect("create skill dir");
+    fs::write(
+        source_dir.join("SKILL.md"),
+        "---\nname: daily-note\ndescription: Вести ежедневные заметки и журнал.\n---\n\n# daily-note\nUse this skill for daily notes.\n",
+    )
+    .expect("write skill prompt");
+    fs::write(source_dir.join("references/format.md"), "# Format\n").expect("write reference");
+
+    let config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        workspace: WorkspaceConfig {
+            default_root: Some(workspace.clone()),
+        },
+        provider: ConfiguredProvider {
+            kind: ProviderKind::OpenAiResponses,
+            api_base: Some(format!("{api_base}/v1")),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("gpt-5.4".to_string()),
+            ..ConfiguredProvider::default()
+        },
+        ..AppConfig::default()
+    };
+    let app = build_from_config(config).expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+    store
+        .put_session(&SessionRecord {
+            id: "session-skill-install".to_string(),
+            title: "Skill Install Session".to_string(),
+            prompt_override: None,
+            settings_json: serde_json::to_string(&SessionSettings::default())
+                .expect("serialize settings"),
+            workspace_root: workspace.display().to_string(),
+            agent_profile_id: "default".to_string(),
+            active_mission_id: None,
+            parent_session_id: None,
+            parent_job_id: None,
+            delegation_label: None,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .expect("put session");
+
+    let report = app
+        .execute_chat_turn("session-skill-install", "install the workspace skill", 10)
+        .expect("execute chat turn");
+    let _first_request = requests.recv().expect("first provider request");
+    let second_request = requests.recv().expect("second provider request");
+    handle.join().expect("join server");
+
+    assert_eq!(report.response_id, "resp_skill_install_2");
+    assert_eq!(report.output_text, "Skill installed and enabled.");
+
+    let installed_dir = app.config.data_dir.join("agents/default/skills/daily-note");
+    assert!(installed_dir.join("SKILL.md").is_file());
+    assert!(installed_dir.join("references/format.md").is_file());
+
+    let normalized_second = second_request.to_ascii_lowercase();
+    assert!(normalized_second.contains("\"call_id\":\"call_skill_install\""));
+    assert!(normalized_second.contains("skill_install"));
+    assert!(normalized_second.contains("daily-note"));
+    assert!(normalized_second.contains("installed_files"));
+    assert!(normalized_second.contains("manual"));
+
+    let session = Session::try_from(
+        store
+            .get_session("session-skill-install")
+            .expect("get session")
+            .expect("session exists"),
+    )
+    .expect("restore session");
+    assert_eq!(
+        session.settings.enabled_skills,
+        vec!["daily-note".to_string()]
+    );
+    assert!(session.settings.disabled_skills.is_empty());
+}
+
+#[test]
 fn execute_chat_turn_can_read_aggregate_autonomy_state_with_tool() {
     let (api_base, requests, handle) = spawn_json_server_sequence(vec![
         r#"{

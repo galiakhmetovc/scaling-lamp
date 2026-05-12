@@ -523,6 +523,17 @@ impl ToolName {
                 "required": ["name"],
                 "additionalProperties": false,
             }),
+            Self::SkillInstall => json!({
+                "type": "object",
+                "properties": {
+                    "source_dir": { "type": "string", "description": "Relative workspace directory containing SKILL.md plus optional scripts/references/data. Do not pass a SKILL.md file path; pass its parent directory." },
+                    "name": { "type": ["string", "null"], "description": "Optional expected skill name. If provided, it must match SKILL.md frontmatter name." },
+                    "enable": { "type": ["boolean", "null"], "description": "Whether to enable the installed skill for the current session. Defaults to true." },
+                    "overwrite": { "type": ["boolean", "null"], "description": "Whether to replace an existing agent-local skill directory with the same name. Defaults to false." }
+                },
+                "required": ["source_dir"],
+                "additionalProperties": false,
+            }),
             Self::SkillDisable => json!({
                 "type": "object",
                 "properties": {

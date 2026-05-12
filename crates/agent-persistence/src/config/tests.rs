@@ -507,6 +507,8 @@ skill_list_default_limit = 7
 skill_list_max_limit = 77
 skill_read_default_max_bytes = 1234
 skill_read_max_bytes = 5678
+skill_install_max_files = 33
+skill_install_max_bytes = 456789
 autonomy_state_default_max_items = 6
 autonomy_state_max_items = 60
 prompt_recent_filesystem_activity_limit = 3
@@ -621,6 +623,8 @@ interagent_default_max_hops = 9
     assert_eq!(config.runtime_limits.skill_list_max_limit, 77);
     assert_eq!(config.runtime_limits.skill_read_default_max_bytes, 1234);
     assert_eq!(config.runtime_limits.skill_read_max_bytes, 5678);
+    assert_eq!(config.runtime_limits.skill_install_max_files, 33);
+    assert_eq!(config.runtime_limits.skill_install_max_bytes, 456789);
     assert_eq!(config.runtime_limits.autonomy_state_default_max_items, 6);
     assert_eq!(config.runtime_limits.autonomy_state_max_items, 60);
     assert_eq!(

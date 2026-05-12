@@ -385,6 +385,8 @@ pub struct RuntimeLimitsConfig {
     pub skill_list_max_limit: usize,
     pub skill_read_default_max_bytes: usize,
     pub skill_read_max_bytes: usize,
+    pub skill_install_max_files: usize,
+    pub skill_install_max_bytes: usize,
     pub autonomy_state_default_max_items: usize,
     pub autonomy_state_max_items: usize,
     pub prompt_recent_filesystem_activity_limit: usize,
@@ -1019,6 +1021,8 @@ impl Default for RuntimeLimitsConfig {
             skill_list_max_limit: 256,
             skill_read_default_max_bytes: 16 * 1024,
             skill_read_max_bytes: 128 * 1024,
+            skill_install_max_files: 256,
+            skill_install_max_bytes: 2 * 1024 * 1024,
             autonomy_state_default_max_items: 8,
             autonomy_state_max_items: 50,
             prompt_recent_filesystem_activity_limit: 6,
@@ -2568,6 +2572,14 @@ impl AppConfig {
         validate_positive_usize_value(
             "runtime_limits.skill_read_max_bytes",
             self.runtime_limits.skill_read_max_bytes,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_install_max_files",
+            self.runtime_limits.skill_install_max_files,
+        )?;
+        validate_positive_usize_value(
+            "runtime_limits.skill_install_max_bytes",
+            self.runtime_limits.skill_install_max_bytes,
         )?;
         validate_positive_usize_value(
             "runtime_limits.autonomy_state_default_max_items",

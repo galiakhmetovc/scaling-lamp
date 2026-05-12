@@ -585,7 +585,8 @@ impl ToolRuntime {
             | ToolCall::SkillList(_)
             | ToolCall::SkillRead(_)
             | ToolCall::SkillEnable(_)
-            | ToolCall::SkillDisable(_) => Err(ToolError::InvalidMemoryTool {
+            | ToolCall::SkillDisable(_)
+            | ToolCall::SkillInstall(_) => Err(ToolError::InvalidMemoryTool {
                 reason: "autonomy and skill tools must execute through the canonical session path"
                     .to_string(),
             }),

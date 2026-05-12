@@ -1017,6 +1017,9 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
     let disable = catalog
         .definition(ToolName::SkillDisable)
         .expect("skill_disable");
+    let install = catalog
+        .definition(ToolName::SkillInstall)
+        .expect("skill_install");
 
     assert_eq!(list.family, ToolFamily::Memory);
     assert!(list.policy.read_only);
@@ -1024,6 +1027,13 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
     assert!(!enable.policy.read_only);
     assert!(!enable.policy.requires_approval);
     assert!(!disable.policy.read_only);
+    assert!(!install.policy.read_only);
+    assert!(
+        install
+            .openai_function_schema()
+            .to_string()
+            .contains("source_dir")
+    );
     assert!(
         read.openai_function_schema()
             .to_string()
@@ -1068,6 +1078,21 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
         disable_call,
         ToolCall::SkillDisable(super::SkillActivationInput {
             name: "rust-debug".to_string(),
+        })
+    );
+
+    let install_call = ToolCall::from_openai_function(
+        "skill_install",
+        r#"{"source_dir":"skills/rust-debug","name":"rust-debug","enable":true,"overwrite":false}"#,
+    )
+    .expect("parse install");
+    assert_eq!(
+        install_call,
+        ToolCall::SkillInstall(super::SkillInstallInput {
+            source_dir: "skills/rust-debug".to_string(),
+            name: Some("rust-debug".to_string()),
+            enable: Some(true),
+            overwrite: Some(false),
         })
     );
 }

@@ -650,7 +650,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 - tool-call result preview cap before offloading full output into artifact
 - context offload/artifact read caps
 - KV key/value/list caps
-- skill list/read caps
+- skill list/read/install caps
 - autonomy state read caps
 - SessionHead activity/tree limits
 - default max hops for new inter-agent chains

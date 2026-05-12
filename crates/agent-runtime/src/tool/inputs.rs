@@ -448,6 +448,17 @@ pub struct SkillActivationInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillInstallInput {
+    pub source_dir: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enable: Option<bool>,
+    #[serde(default)]
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactReadInput {
     pub artifact_id: String,
     #[serde(default)]
@@ -901,6 +912,7 @@ pub enum ToolCall {
     SkillRead(SkillReadInput),
     SkillEnable(SkillActivationInput),
     SkillDisable(SkillActivationInput),
+    SkillInstall(SkillInstallInput),
     ArtifactRead(ArtifactReadInput),
     ArtifactSearch(ArtifactSearchInput),
     ArtifactPin(ArtifactPinInput),
