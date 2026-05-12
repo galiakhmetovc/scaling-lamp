@@ -792,7 +792,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SessionWait,
                 family: ToolFamily::Agent,
-                description: "Wait for queued or running work in a session to settle, then return a bounded session snapshot; use this after message_agent when you need the other agent's reply before concluding. If you set mode, send it as a quoted JSON string, for example {\"session_id\":\"...\",\"mode\":\"transcript\"}",
+                description: "Wait for queued or running work in a session to settle, then return a bounded session snapshot; use this after message_agent only when you explicitly need the other agent's reply before concluding. Otherwise continue and inspect /tasks or the task registry later. If you set mode, send it as a quoted JSON string, for example {\"session_id\":\"...\",\"mode\":\"transcript\"}",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,
@@ -942,7 +942,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::MessageAgent,
                 family: ToolFamily::Agent,
-                description: "Queue an asynchronous message to another agent by creating a fresh recipient session and background job; this returns recipient ids and does not wait for the reply",
+                description: "Queue an asynchronous message to another agent by creating a fresh recipient session and background job; this returns ids for the recipient session/job/task flow and does not wait for the reply. Continue parent work unless you explicitly need session_wait now; inspect /tasks or the task registry later for multi-step work.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,

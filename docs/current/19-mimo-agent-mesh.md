@@ -176,6 +176,7 @@ delivery_target {
 - target регистрируется оператором;
 - session может иметь несколько output routes;
 - output route имеет свой delivery cursor;
+- `allowed_session_ids` и `allowed_agent_ids` ограничивают доставку для session output и task-result followers;
 - доставка не меняет selected input session;
 - ошибка доставки не должна ломать run, она должна попадать в delivery/task status.
 
@@ -305,10 +306,15 @@ output_route {
 
 - `full_text`;
 - `summary`;
-- `artifact_only`;
-- `json`;
 - `status_only`;
 - `errors_only`.
+
+Реализованный Phase 1 поддерживает `full_text`, `summary`, `status_only`, `errors_only`.
+
+- `full_text` доставляет полный assistant/task result text в рамках лимитов Telegram sender.
+- `summary` доставляет короткий текстовый summary/excerpt без полного payload.
+- `status_only` доставляет только факт появления ответа или завершения task.
+- `errors_only` не доставляет успешные outputs; для failed/cancelled/blocked работ отправляет только ошибку/status без полного transcript/result JSON.
 
 Каждый route имеет собственный cursor. Это важно: один и тот же assistant transcript может быть уже доставлен в admin chat, но ещё не доставлен в alerts chat.
 

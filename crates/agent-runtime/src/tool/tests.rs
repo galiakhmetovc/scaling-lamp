@@ -776,11 +776,19 @@ fn interagent_tool_definitions_are_explicit_about_async_follow_up_flow() {
             .description
             .contains("does not wait for the reply")
     );
+    assert!(message_agent.description.contains("returns ids"));
+    assert!(message_agent.description.contains("task registry"));
     assert!(
         session_wait
             .description
             .contains("use this after message_agent")
     );
+    assert!(
+        session_wait
+            .description
+            .contains("only when you explicitly need")
+    );
+    assert!(session_wait.description.contains("continue"));
     assert!(session_wait.description.contains(r#""mode":"transcript""#));
     assert!(message_schema.contains("does not wait for the reply"));
     assert!(session_wait_schema.contains("recipient_session_id"));

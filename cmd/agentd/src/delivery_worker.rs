@@ -1,8 +1,9 @@
 use crate::bootstrap::App;
 use agent_persistence::{
     DeliveryRepository, DeliveryTargetRecord, EventDeliveryRecord, EventOutboxRecord,
-    EventRepository, SessionOutputRouteRecord, TaskRegistryRecord, TaskRegistryRepository,
-    TranscriptRecord, TranscriptRepository,
+    EventRepository, RunRecord, RunRepository, SessionOutputRouteRecord, SessionRecord,
+    SessionRepository, TaskRegistryRecord, TaskRegistryRepository, TranscriptRecord,
+    TranscriptRepository,
 };
 use serde_json::Value;
 use std::fmt;
@@ -102,6 +103,28 @@ where
     let envelope = OutputEnvelope::from_outbox(&outbox)?;
     let transcript =
         latest_assistant_transcript_for_run(&store, &envelope.session_id, &envelope.run_id)?;
+    let session = store
+        .get_session(&envelope.session_id)
+        .map_err(|error| {
+            DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+        })?
+        .ok_or_else(|| {
+            DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::InvalidEnvelope,
+                format!("session {} not found", envelope.session_id),
+            )
+        })?;
+    let run = store
+        .get_run(&envelope.run_id)
+        .map_err(|error| {
+            DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+        })?
+        .ok_or_else(|| {
+            DeliveryWorkerError::new(
+                DeliveryWorkerErrorKind::InvalidEnvelope,
+                format!("run {} not found", envelope.run_id),
+            )
+        })?;
     let routes = store
         .list_enabled_session_output_routes(&envelope.session_id)
         .map_err(|error| {
@@ -137,7 +160,24 @@ where
             report.failed += 1;
             continue;
         };
-        let text = render_delivery_text(&envelope.session_id, &route, &target, &transcript);
+        if let Err(error) = target_allows_session_output(&target, &session) {
+            persist_delivery(
+                &store,
+                &envelope,
+                &target.target_id,
+                "failed",
+                Some(error),
+                now,
+            )?;
+            report.failed += 1;
+            continue;
+        }
+        let Some(text) =
+            render_delivery_text(&envelope.session_id, &route, &target, &transcript, &run)
+        else {
+            report.skipped += 1;
+            continue;
+        };
         match sender.send_text(&target, &text) {
             Ok(()) => {
                 persist_delivery(&store, &envelope, &target.target_id, "delivered", None, now)?;
@@ -247,7 +287,30 @@ where
             report.failed += 1;
             continue;
         };
-        let text = render_task_result_text(&task, &target);
+        if let Err(error) = target_allows_task_result(&target, &task) {
+            persist_event_delivery(
+                &store,
+                &envelope.event_id,
+                &target.target_id,
+                "failed",
+                Some(error.clone()),
+                now,
+            )?;
+            let mut updated_follower = follower;
+            updated_follower.updated_at = now;
+            updated_follower.last_error = Some(error);
+            store
+                .put_task_follower(&updated_follower)
+                .map_err(|error| {
+                    DeliveryWorkerError::new(DeliveryWorkerErrorKind::Store, error.to_string())
+                })?;
+            report.failed += 1;
+            continue;
+        }
+        let Some(text) = render_task_result_text(&task, &target) else {
+            report.skipped += 1;
+            continue;
+        };
         match sender.send_text(&target, &text) {
             Ok(()) => {
                 persist_event_delivery(
@@ -441,24 +504,141 @@ fn render_delivery_text(
     route: &SessionOutputRouteRecord,
     target: &DeliveryTargetRecord,
     transcript: &TranscriptRecord,
-) -> String {
+    run: &RunRecord,
+) -> Option<String> {
     let policy = if route.format_policy.trim().is_empty() {
         target.format_policy.as_str()
     } else {
         route.format_policy.as_str()
     };
     match policy {
-        "status_only" => format!("Session {session_id} produced a new assistant response."),
-        _ => transcript.content.clone(),
+        "status_only" => Some(format!(
+            "Session {session_id} produced a new assistant response."
+        )),
+        "summary" => Some(format!(
+            "Session {session_id} assistant response:\n{}",
+            bounded_single_line(&transcript.content, 700)
+        )),
+        "errors_only" if run.status == "failed" || run.status == "cancelled" => Some(format!(
+            "Session {session_id} failed: {}",
+            run.error.as_deref().unwrap_or("unknown error")
+        )),
+        "errors_only" => None,
+        _ => Some(transcript.content.clone()),
     }
 }
 
-fn render_task_result_text(task: &TaskRegistryRecord, target: &DeliveryTargetRecord) -> String {
+fn target_allows_session_output(
+    target: &DeliveryTargetRecord,
+    session: &SessionRecord,
+) -> Result<(), String> {
+    let allowed_sessions =
+        parse_string_array(&target.allowed_session_ids_json, "allowed_session_ids_json")?;
+    if !allowed_sessions.is_empty() && !allowed_sessions.iter().any(|id| id == &session.id) {
+        return Err(format!(
+            "delivery target {} is not allowed for session {}",
+            target.target_id, session.id
+        ));
+    }
+    let allowed_agents =
+        parse_string_array(&target.allowed_agent_ids_json, "allowed_agent_ids_json")?;
+    if !allowed_agents.is_empty()
+        && !allowed_agents
+            .iter()
+            .any(|id| id == &session.agent_profile_id)
+    {
+        return Err(format!(
+            "delivery target {} is not allowed for agent {}",
+            target.target_id, session.agent_profile_id
+        ));
+    }
+    Ok(())
+}
+
+fn target_allows_task_result(
+    target: &DeliveryTargetRecord,
+    task: &TaskRegistryRecord,
+) -> Result<(), String> {
+    let allowed_sessions =
+        parse_string_array(&target.allowed_session_ids_json, "allowed_session_ids_json")?;
+    if !allowed_sessions.is_empty() {
+        let Some(source_session_id) = task.source_session_id.as_deref() else {
+            return Err(format!(
+                "delivery target {} is not allowed for task {} without source session",
+                target.target_id, task.task_id
+            ));
+        };
+        if !allowed_sessions.iter().any(|id| id == source_session_id) {
+            return Err(format!(
+                "delivery target {} is not allowed for session {}",
+                target.target_id, source_session_id
+            ));
+        }
+    }
+
+    let allowed_agents =
+        parse_string_array(&target.allowed_agent_ids_json, "allowed_agent_ids_json")?;
+    if !allowed_agents.is_empty() {
+        let owner_allowed = task
+            .owner_agent_id
+            .as_deref()
+            .is_some_and(|agent_id| allowed_agents.iter().any(|id| id == agent_id));
+        let executor_allowed = task
+            .executor_agent_id
+            .as_deref()
+            .is_some_and(|agent_id| allowed_agents.iter().any(|id| id == agent_id));
+        if !owner_allowed && !executor_allowed {
+            return Err(format!(
+                "delivery target {} is not allowed for task agents owner={:?} executor={:?}",
+                target.target_id, task.owner_agent_id, task.executor_agent_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_string_array(raw: &str, label: &'static str) -> Result<Vec<String>, String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .map_err(|error| format!("invalid delivery target {label}: {error}"))
+}
+
+fn bounded_single_line(value: &str, max_chars: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    let mut trimmed = compact.chars().take(max_chars).collect::<String>();
+    trimmed.push_str("...");
+    trimmed
+}
+
+fn render_task_result_text(
+    task: &TaskRegistryRecord,
+    target: &DeliveryTargetRecord,
+) -> Option<String> {
     match target.format_policy.as_str() {
-        "status_only" => format!(
+        "status_only" => Some(format!(
             "Task {} finished with status {}.",
             task.task_id, task.status
-        ),
+        )),
+        "summary" => Some(format!(
+            "Task {} {} ({})",
+            task.task_id, task.status, task.kind
+        )),
+        "errors_only"
+            if task.status == "failed"
+                || task.status == "blocked"
+                || task.status == "cancelled" =>
+        {
+            Some(format!(
+                "Task {} finished with status {}: {}",
+                task.task_id,
+                task.status,
+                task.error.as_deref().unwrap_or("no error detail")
+            ))
+        }
+        "errors_only" => None,
         _ => {
             let mut lines = vec![
                 "Task result:".to_string(),
@@ -479,7 +659,7 @@ fn render_task_result_text(task: &TaskRegistryRecord, target: &DeliveryTargetRec
                 lines.push("- result_ref_json:".to_string());
                 lines.extend(indent_lines(&pretty_json_str(result_ref_json), "  "));
             }
-            lines.join("\n")
+            Some(lines.join("\n"))
         }
     }
 }

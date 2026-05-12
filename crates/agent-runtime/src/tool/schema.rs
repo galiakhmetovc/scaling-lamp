@@ -739,8 +739,8 @@ impl ToolName {
             Self::SessionWait => json!({
                 "type": "object",
                 "properties": {
-                    "session_id": { "type": "string", "description": "Session id to wait on; after message_agent this should normally be the returned recipient_session_id" },
-                    "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Optional wait timeout in milliseconds; defaults to the runtime request timeout and 0 means read immediately without waiting" },
+                    "session_id": { "type": "string", "description": "Session id to wait on; after message_agent this should normally be the returned recipient_session_id. Use only when you explicitly need a bounded snapshot now." },
+                    "wait_timeout_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Optional wait timeout in milliseconds; defaults to the runtime request timeout and 0 means read immediately without waiting. Keep waits bounded; otherwise continue and inspect /tasks/task registry later." },
                     "mode": { "type": ["string", "null"], "enum": ["summary", "timeline", "transcript", "artifacts", null], "description": "Optional bounded view mode for the returned snapshot as a quoted JSON string; use \"summary\", \"timeline\", \"transcript\", or \"artifacts\". Defaults to transcript" },
                     "cursor": { "type": ["integer", "null"], "minimum": 0, "description": "Optional item cursor returned by a previous session_wait or session_read call" },
                     "max_items": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum number of messages or artifacts to return" },
@@ -897,7 +897,7 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "target_agent_id": { "type": "string", "description": "Global agent profile id to message" },
-                    "message": { "type": "string", "description": "The user-like message to deliver into a fresh recipient session; this tool only queues the work and does not wait for the reply" }
+                    "message": { "type": "string", "description": "The user-like message to deliver into a fresh recipient session; this tool queues async work, returns recipient ids/task refs, and does not wait for the reply" }
                 },
                 "required": ["target_agent_id", "message"],
                 "additionalProperties": false,
