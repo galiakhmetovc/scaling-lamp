@@ -24,6 +24,7 @@ mod provider_prompt;
 mod provider_text;
 mod provider_tool_dispatch;
 mod scopes;
+mod skill_install;
 mod supervisor;
 mod tools;
 mod wakeup;
