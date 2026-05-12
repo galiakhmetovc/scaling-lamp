@@ -9,6 +9,7 @@ Web Console — операторская панель поверх уже сущ
 Он нужен для:
 
 - просмотра состояния runtime, Postgres, NATS и сборки;
+- основной работы с агентом через отдельный экран `Чат`;
 - работы с сессиями: список, transcript, debug, task registry, active run;
 - просмотра агентов, tool calls, delivery routes, Telegram bindings и traces;
 - базового создания сессий и agent profiles через существующие HTTP endpoints;
@@ -111,6 +112,8 @@ Caddy должен проксировать:
 - native React/Vite/MUI приложение;
 - Node static server + reverse proxy к `agentd`;
 - обзор runtime;
+- отдельный экран `Чат` для основной работы с выбранной сессией;
+- нормальное отображение Markdown-ответов агента: GFM, таблицы, списки, ссылки, inline code и code blocks;
 - сессии: трёхпанельный операторский экран `список -> timeline -> inspector`;
 - session timeline: единая лента сообщений, tool calls и артефактов из canonical debug/transcript data;
 - session inspector: выбранная сессия, оперативные счётчики, выбранное событие, active run;
@@ -120,6 +123,38 @@ Caddy должен проксировать:
 - tool calls: таблица с фильтром и ошибками;
 - routes: delivery targets и Telegram bindings;
 - traces: таблица trace links.
+
+## Frontend decomposition
+
+Web UI не должен превращаться в один God file.
+
+Текущая структура:
+
+```text
+apps/web/src/
+├── App.tsx                         # orchestration: загрузка данных, выбранная секция, dialogs state
+├── api.ts                          # thin HTTP client к /api/agentd/*
+├── components/                     # общие UI элементы
+│   ├── ConsoleShell.tsx
+│   ├── CreateAgentDialog.tsx
+│   ├── CreateSessionDialog.tsx
+│   ├── MarkdownMessage.tsx
+│   └── common.tsx
+├── features/
+│   ├── chat/                       # основной рабочий чат
+│   ├── sessions/                   # timeline/transcript/debug/tasks/inspector
+│   ├── overview/
+│   ├── agents/
+│   ├── tools/
+│   ├── routes/
+│   ├── traces/
+│   ├── runs/
+│   └── settings/
+├── ui/                             # theme/navigation
+└── utils/                          # форматирование и мелкие pure helpers
+```
+
+Правило для будущих изменений: новый экран или крупный блок добавляется в `features/<domain>/`, а не в `App.tsx`. `App.tsx` может знать о состоянии приложения и выборе экрана, но не должен содержать таблицы, markdown renderer, карточки inspector или бизнес-разметку экранов.
 
 Ограничения:
 

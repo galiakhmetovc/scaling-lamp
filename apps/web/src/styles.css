@@ -46,13 +46,24 @@ body {
   align-items: start;
 }
 
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.64fr) minmax(560px, 1.34fr) minmax(300px, 0.72fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .session-list,
 .session-workspace,
-.session-inspector {
+.session-inspector,
+.chat-session-list,
+.chat-main,
+.chat-inspector {
   min-width: 0;
 }
 
-.session-inspector {
+.session-inspector,
+.chat-inspector {
   position: sticky;
   top: 68px;
 }
@@ -175,6 +186,188 @@ body {
   word-break: break-word;
 }
 
+.chat-main {
+  display: grid;
+  grid-template-rows: auto auto minmax(420px, calc(100vh - 330px)) auto auto;
+  overflow: hidden;
+}
+
+.chat-header,
+.chat-composer {
+  padding: 14px;
+}
+
+.chat-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 420px;
+  padding: 14px;
+  overflow: auto;
+}
+
+.chat-message {
+  width: min(100%, 980px);
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.chat-message.role-user {
+  width: min(88%, 840px);
+  margin-left: auto;
+  background: rgba(158, 182, 255, 0.08);
+}
+
+.chat-message.role-assistant {
+  width: min(96%, 980px);
+  margin-right: auto;
+  background: rgba(121, 199, 183, 0.06);
+}
+
+.chat-message.role-system {
+  background: rgba(242, 195, 107, 0.06);
+}
+
+.chat-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.chat-user-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-message {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.markdown-message > :first-child {
+  margin-top: 0;
+}
+
+.markdown-message > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message p,
+.markdown-message ul,
+.markdown-message ol,
+.markdown-message blockquote,
+.markdown-message pre,
+.markdown-message table {
+  margin: 0 0 12px;
+}
+
+.markdown-message ul,
+.markdown-message ol {
+  padding-left: 22px;
+}
+
+.markdown-message li + li {
+  margin-top: 4px;
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3 {
+  margin: 16px 0 8px;
+  line-height: 1.25;
+}
+
+.markdown-message h1 {
+  font-size: 20px;
+}
+
+.markdown-message h2 {
+  font-size: 17px;
+}
+
+.markdown-message h3 {
+  font-size: 15px;
+}
+
+.markdown-message blockquote {
+  padding-left: 12px;
+  border-left: 3px solid rgba(121, 199, 183, 0.45);
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.markdown-message a {
+  color: #9eb6ff;
+}
+
+.markdown-inline-code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #dce8ff;
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.markdown-code-block {
+  max-width: 100%;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: #0d1117;
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.markdown-table-wrap {
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+
+.markdown-table-wrap table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-table-wrap th,
+.markdown-table-wrap td {
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  vertical-align: top;
+}
+
+.markdown-table-wrap th {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 700;
+}
+
+.chat-tool-row {
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .json-block {
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -192,11 +385,13 @@ body {
 
 @media (max-width: 1100px) {
   .grid-two,
-  .session-layout {
+  .session-layout,
+  .chat-layout {
     grid-template-columns: 1fr;
   }
 
-  .session-inspector {
+  .session-inspector,
+  .chat-inspector {
     position: static;
   }
 
