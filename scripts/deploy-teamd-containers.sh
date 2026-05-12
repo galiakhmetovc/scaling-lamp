@@ -192,6 +192,7 @@ else
 fi
 CADDY_IMAGE=${TEAMD_CADDY_IMAGE:-docker.io/library/caddy:2}
 CADDY_DAEMON_UPSTREAM=${TEAMD_CADDY_DAEMON_UPSTREAM:-host.docker.internal:5140}
+CADDY_WEB_UPSTREAM=${TEAMD_CADDY_WEB_UPSTREAM:-host.docker.internal:5173}
 CADDY_DIR=$CONTAINERS_ROOT/caddy
 CADDY_DATA_DIR=$DATA_ROOT/caddy/data
 CADDY_CONFIG_DIR=$DATA_ROOT/caddy/config
@@ -389,6 +390,8 @@ Environment overrides:
                                  otherwise disabled.
   TEAMD_CADDY_DAEMON_UPSTREAM    Upstream for daemon routes from Caddy,
                                  default: $CADDY_DAEMON_UPSTREAM.
+  TEAMD_CADDY_WEB_UPSTREAM       Upstream for the native web console routes
+                                 /web/ and /api/agentd/*, default: $CADDY_WEB_UPSTREAM.
 EOF
 }
 
@@ -2094,8 +2097,14 @@ files.$CADDY_DOMAIN {
   webhook_handle="  handle /v1/telegram/webhook/* {
     reverse_proxy $CADDY_DAEMON_UPSTREAM
   }"
-  core_web_handle="  handle /web* {
-    reverse_proxy $CADDY_DAEMON_UPSTREAM
+  core_web_handle="  redir /web /web/ 308
+
+  handle_path /web/* {
+    reverse_proxy $CADDY_WEB_UPSTREAM
+  }
+
+  handle /api/agentd/* {
+    reverse_proxy $CADDY_WEB_UPSTREAM
   }
 
   handle /v1/web/* {

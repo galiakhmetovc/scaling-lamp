@@ -17,6 +17,7 @@
 - `teamd-nats` — local NATS JetStream для MIMO/webhook event runtime;
 - `teamd-searxng` — локальный search backend для `web_search`;
 - `teamd-caddy` — edge reverse proxy.
+- `teamd-web` — host systemd service для native web console; Caddy проксирует `/web/` и `/api/agentd/*` на него.
 
 Опционально:
 
@@ -346,6 +347,7 @@ TEAMD_CADDY_DOMAIN='teamd.qlbc.ru' \
 Routes:
 
 - `https://teamd.qlbc.ru/sb/` -> SilverBullet;
+- `https://teamd.qlbc.ru/web/` -> native teamD Web Console;
 - `https://teamd.qlbc.ru/searxng/` -> SearXNG;
 - `https://teamd.qlbc.ru/jaeger/` -> Jaeger;
 - `https://teamd.qlbc.ru/files/` -> File Browser.

@@ -80,6 +80,22 @@ corepack pnpm build
 TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 node server.mjs
 ```
 
+Для публикации под single-domain Caddy route `https://<domain>/web/` сборка должна использовать base path:
+
+```sh
+corepack pnpm exec vite build --base=/web/
+```
+
+Caddy должен проксировать:
+
+```text
+/web/ -> teamd-web upstream
+/api/agentd/* -> teamd-web upstream
+/v1/web/* -> agentd upstream
+```
+
+`/api/agentd/*` идёт через `teamd-web`, потому что web server держит внутренний `TEAMD_AGENTD_BASE_URL` и при необходимости `TEAMD_AGENTD_TOKEN`.
+
 Переменные:
 
 - `TEAMD_WEB_HOST` или `HOST` — host bind, по умолчанию `0.0.0.0`;
