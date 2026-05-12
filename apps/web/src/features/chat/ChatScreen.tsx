@@ -92,6 +92,15 @@ export function ChatScreen({
     const transcriptMessages = (transcript?.entries ?? []).filter((entry) => !entry.tool_name);
     const selectedPendingMessages = pendingMessages
       .filter((entry) => entry.session_id === selectedSessionId)
+      .filter((entry) => {
+        return !transcriptMessages.some((transcriptEntry) => {
+          return (
+            transcriptEntry.role === "user" &&
+            transcriptEntry.content === entry.content &&
+            transcriptEntry.created_at >= entry.created_at - 10
+          );
+        });
+      })
       .map((entry) => ({
         role: entry.role,
         content: entry.content,
