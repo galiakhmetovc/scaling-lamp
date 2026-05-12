@@ -23,6 +23,9 @@ export function SessionsScreen({
   sessionEvents,
   selectedEvent,
   sessionFilter,
+  sessionsTotal,
+  sessionsOffset,
+  sessionsLimit,
   message,
   loading,
   detailLoading,
@@ -32,6 +35,7 @@ export function SessionsScreen({
   onCreateSession,
   onSelectSession,
   onFilterChange,
+  onSessionsPageChange,
   onPaneChange,
   onSelectEvent,
   onMessageChange,
@@ -51,6 +55,9 @@ export function SessionsScreen({
   sessionEvents: SessionEvent[];
   selectedEvent: SessionEvent | null;
   sessionFilter: string;
+  sessionsTotal: number;
+  sessionsOffset: number;
+  sessionsLimit: number;
   message: string;
   loading: boolean;
   detailLoading: boolean;
@@ -60,6 +67,7 @@ export function SessionsScreen({
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
   onFilterChange: (value: string) => void;
+  onSessionsPageChange: (offset: number) => void;
   onPaneChange: (value: SessionPane) => void;
   onSelectEvent: (id: string) => void;
   onMessageChange: (value: string) => void;
@@ -89,8 +97,12 @@ export function SessionsScreen({
             sessions={sessions}
             selectedId={selectedSessionId}
             filter={sessionFilter}
+            total={sessionsTotal}
+            offset={sessionsOffset}
+            limit={sessionsLimit}
             onFilterChange={onFilterChange}
             onSelect={onSelectSession}
+            onPageChange={onSessionsPageChange}
           />
         </Box>
         <Box className="session-workspace">

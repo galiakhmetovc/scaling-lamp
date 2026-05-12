@@ -18,6 +18,8 @@ import { JsonBlock, SectionHeader } from "./components/common";
 import type { SessionDebug, SessionSummary, SessionTask, SessionTranscript, WebSnapshot } from "./types";
 import type { SectionId } from "./ui/navigation";
 
+const SESSION_PAGE_SIZE = 25;
+
 export function App() {
   const [section, setSection] = useState<SectionId>("chat");
   const [snapshot, setSnapshot] = useState<WebSnapshot | null>(null);
@@ -34,6 +36,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState("");
+  const [sessionsOffset, setSessionsOffset] = useState(0);
   const [toolFilter, setToolFilter] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -45,14 +48,20 @@ export function App() {
   const [newAgentName, setNewAgentName] = useState("");
   const [newAgentTemplate, setNewAgentTemplate] = useState("default");
 
-  async function loadData(signal?: AbortSignal) {
+  async function loadData(signal?: AbortSignal, offset = sessionsOffset, preferredSessionId?: string) {
     setLoading(true);
     setError(null);
     try {
-      const [nextSnapshot, nextSessions] = await Promise.all([api.snapshot(signal), api.sessions(signal)]);
+      const [nextSnapshot, nextSessions] = await Promise.all([
+        api.snapshot(signal),
+        api.sessions(SESSION_PAGE_SIZE, offset, signal)
+      ]);
       setSnapshot(nextSnapshot);
       setSessions(nextSessions);
       setSelectedSessionId((current) => {
+        if (preferredSessionId && nextSessions.some((session) => session.id === preferredSessionId)) {
+          return preferredSessionId;
+        }
         if (current && nextSessions.some((session) => session.id === current)) {
           return current;
         }
@@ -96,13 +105,13 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadData(controller.signal);
-    const timer = window.setInterval(() => void loadData(controller.signal), 10_000);
+    void loadData(controller.signal, sessionsOffset);
+    const timer = window.setInterval(() => void loadData(controller.signal, sessionsOffset), 10_000);
     return () => {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, []);
+  }, [sessionsOffset]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -119,6 +128,7 @@ export function App() {
   }, [selectedSessionId]);
 
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const sessionsTotal = snapshot?.status.session_count ?? sessions.length;
   const toolErrors = snapshot?.recent_tool_calls.filter((tool) => tool.status !== "completed" || tool.error).length ?? 0;
   const activeRuns = snapshot?.recent_runs.filter((runItem) => ["running", "queued"].includes(runItem.status)).length ?? 0;
   const sessionEvents = buildSessionEvents(debug, transcript);
@@ -164,9 +174,10 @@ export function App() {
       const created = await api.createSession(title, newSessionAgent || undefined);
       setCreateSessionOpen(false);
       setSelectedSessionId(created.id);
+      setSessionsOffset(0);
       setSection("chat");
       setNotice(`Сессия создана: ${created.title}`);
-      await loadData();
+      await loadData(undefined, 0, created.id);
     } catch (createError) {
       setNotice(createError instanceof Error ? createError.message : String(createError));
     }
@@ -197,7 +208,7 @@ export function App() {
       await (all ? api.cancelAllWork(selectedSessionId) : api.cancelRun(selectedSessionId));
       setNotice(all ? "Запрошена отмена всей работы сессии." : "Запрошена отмена активного run.");
       await loadSessionDetails(selectedSessionId);
-      await loadData();
+      await loadData(undefined, sessionsOffset);
     } catch (cancelError) {
       setNotice(cancelError instanceof Error ? cancelError.message : String(cancelError));
     }
@@ -207,7 +218,7 @@ export function App() {
     if (selectedSessionId) {
       void loadSessionDetails(selectedSessionId);
     }
-    void loadData();
+    void loadData(undefined, sessionsOffset);
   }
 
   function renderContent() {
@@ -244,6 +255,9 @@ export function App() {
             tasks={tasks}
             tools={snapshot?.recent_tool_calls ?? []}
             sessionFilter={sessionFilter}
+            sessionsTotal={sessionsTotal}
+            sessionsOffset={sessionsOffset}
+            sessionsLimit={SESSION_PAGE_SIZE}
             message={message}
             loading={loading}
             detailLoading={detailLoading}
@@ -253,6 +267,7 @@ export function App() {
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
             onFilterChange={setSessionFilter}
+            onSessionsPageChange={setSessionsOffset}
             onMessageChange={setMessage}
             onSend={() => void submitMessage()}
             onCancelRun={() => void cancelRun(false)}
@@ -274,6 +289,9 @@ export function App() {
             sessionEvents={sessionEvents}
             selectedEvent={selectedEvent}
             sessionFilter={sessionFilter}
+            sessionsTotal={sessionsTotal}
+            sessionsOffset={sessionsOffset}
+            sessionsLimit={SESSION_PAGE_SIZE}
             message={message}
             loading={loading}
             detailLoading={detailLoading}
@@ -283,6 +301,7 @@ export function App() {
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
             onFilterChange={setSessionFilter}
+            onSessionsPageChange={setSessionsOffset}
             onPaneChange={setSessionPane}
             onSelectEvent={setSelectedEventId}
             onMessageChange={setMessage}
@@ -340,7 +359,7 @@ export function App() {
     <ConsoleShell
       section={section}
       snapshot={snapshot}
-      sessionsLength={sessions.length}
+      sessionsLength={sessionsTotal}
       toolErrors={toolErrors}
       loading={loading}
       onSectionChange={setSection}

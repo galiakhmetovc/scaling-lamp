@@ -66,7 +66,13 @@ pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io:
 }
 
 pub(super) fn handle_list_sessions(app: &App, request: Request) -> std::io::Result<()> {
-    let sessions = match app.list_session_summaries() {
+    let limit = query_usize(&request, "limit").map(|value| value.clamp(1, 100));
+    let offset = query_usize(&request, "offset").unwrap_or(0);
+    let sessions_result = match limit {
+        Some(limit) => app.list_session_summaries_page(limit, offset),
+        None => app.list_session_summaries(),
+    };
+    let sessions = match sessions_result {
         Ok(sessions) => sessions
             .into_iter()
             .map(SessionSummaryResponse::from)
@@ -77,6 +83,18 @@ pub(super) fn handle_list_sessions(app: &App, request: Request) -> std::io::Resu
         }
     };
     respond_json(request, StatusCode(200), &sessions)
+}
+
+fn query_usize(request: &Request, name: &str) -> Option<usize> {
+    let query = request.url().split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        if key == name {
+            value.parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
 }
 
 pub(super) fn handle_memory_session_search(app: &App, mut request: Request) -> std::io::Result<()> {

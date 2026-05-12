@@ -22,7 +22,7 @@ Web Console не является вторым агентным runtime.
 Все действия идут через canonical `agentd` HTTP API:
 
 - snapshot: `GET /v1/web/snapshot`;
-- список сессий: `GET /v1/sessions`;
+- список сессий: `GET /v1/sessions?limit=25&offset=0`;
 - transcript: `GET /v1/sessions/{id}/transcript-tail/{limit}`;
 - debug: `GET /v1/sessions/{id}/debug`;
 - task registry сессии: `GET /v1/sessions/{id}/tasks`;
@@ -113,7 +113,10 @@ Caddy должен проксировать:
 - Node static server + reverse proxy к `agentd`;
 - обзор runtime;
 - отдельный экран `Чат` для основной работы с выбранной сессией;
+- в `Чате` боковые панели `Сессии` и `Статус` по умолчанию свернуты в узкие рейлы, чтобы основной режим был именно chat-only;
+- composer поддерживает command mode через `/`: web-команды открывают сессии, статус, refresh, stop/cancel или создают новую сессию без второго runtime path;
 - нормальное отображение Markdown-ответов агента: GFM, таблицы, списки, ссылки, inline code и code blocks;
+- список сессий грузится страницами через `limit/offset`, а не целиком;
 - сессии: трёхпанельный операторский экран `список -> timeline -> inspector`;
 - session timeline: единая лента сообщений, tool calls и артефактов из canonical debug/transcript data;
 - session inspector: выбранная сессия, оперативные счётчики, выбранное событие, active run;

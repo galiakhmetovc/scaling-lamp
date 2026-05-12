@@ -1,4 +1,5 @@
 import {
+  Button,
   Paper,
   Stack,
   Table,
@@ -18,14 +19,22 @@ export function SessionsTable({
   sessions,
   selectedId,
   filter,
+  total,
+  offset,
+  limit,
   onFilterChange,
-  onSelect
+  onSelect,
+  onPageChange
 }: {
   sessions: SessionSummary[];
   selectedId: string | null;
   filter: string;
+  total: number;
+  offset: number;
+  limit: number;
   onFilterChange: (value: string) => void;
   onSelect: (id: string) => void;
+  onPageChange: (offset: number) => void;
 }) {
   const normalizedFilter = filter.trim().toLowerCase();
   const filtered = sessions.filter((session) => {
@@ -46,7 +55,28 @@ export function SessionsTable({
         onChange={(event) => onFilterChange(event.target.value)}
         placeholder="Название, id, агент, текст"
       />
-      <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: "calc(100vh - 260px)" }}>
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+        <Typography variant="caption" color="text.secondary">
+          {total === 0 ? "0 сессий" : `${offset + 1}-${offset + filtered.length} из ${total}`}
+        </Typography>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            disabled={offset === 0}
+            onClick={() => onPageChange(Math.max(0, offset - limit))}
+          >
+            Назад
+          </Button>
+          <Button
+            variant="outlined"
+            disabled={offset + limit >= total}
+            onClick={() => onPageChange(offset + limit)}
+          >
+            Вперёд
+          </Button>
+        </Stack>
+      </Stack>
+      <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: "calc(100vh - 300px)" }}>
         <Table stickyHeader size="small">
           <TableHead>
             <TableRow>

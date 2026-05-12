@@ -62,7 +62,14 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         );
     }
 
-    match (request.method(), request.url()) {
+    let request_path = request
+        .url()
+        .split('?')
+        .next()
+        .unwrap_or_else(|| request.url())
+        .to_string();
+
+    match (request.method(), request_path.as_str()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
         (&tiny_http::Method::Get, "/v1/about") => status::handle_about(app, request),
         (&tiny_http::Method::Get, "/v1/web/snapshot") => web::handle_web_snapshot(app, request),

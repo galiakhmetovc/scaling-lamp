@@ -21,9 +21,9 @@ use crate::{about::RuntimeReleaseUpdater, cli, execution, mcp::SharedMcpRegistry
 use agent_persistence::{
     AgentRepository, AppConfig, ConfigError, ContextSummaryRepository, JobRepository,
     PersistenceScaffold, PersistenceStore, PlanRepository, RecordConversionError, RunRecord,
-    RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionRepository, StoreError,
-    TraceRepository, TranscriptRepository, audit::AuditLogConfig, normalize_absolute_path,
-    recovery, validate_workspace_root_path,
+    RunRepository, RunSummaryRollup, SessionActiveJobCounts, SessionRecord, SessionRepository,
+    StoreError, TraceRepository, TranscriptRepository, audit::AuditLogConfig,
+    normalize_absolute_path, recovery, validate_workspace_root_path,
 };
 use agent_runtime::RuntimeScaffold;
 use agent_runtime::agent::{AgentSchedule, AgentScheduleDeliveryMode, AgentScheduleMode};
@@ -431,7 +431,17 @@ impl SessionTranscriptView {
 fn build_session_summaries(
     store: &PersistenceStore,
     config: &AppConfig,
+    workspace: &agent_runtime::workspace::WorkspaceRef,
+) -> Result<Vec<SessionSummary>, BootstrapError> {
+    let records = store.list_sessions()?;
+    build_session_summaries_for_records(store, config, workspace, records)
+}
+
+fn build_session_summaries_for_records(
+    store: &PersistenceStore,
+    config: &AppConfig,
     _workspace: &agent_runtime::workspace::WorkspaceRef,
+    records: Vec<SessionRecord>,
 ) -> Result<Vec<SessionSummary>, BootstrapError> {
     let audit = AuditLogConfig::from_config(config);
     let emit_step =
@@ -454,8 +464,7 @@ fn build_session_summaries(
         };
 
     let step_started = Instant::now();
-    let sessions = store
-        .list_sessions()?
+    let sessions = records
         .into_iter()
         .filter_map(|record| agent_runtime::session::Session::try_from(record).ok())
         .collect::<Vec<_>>();

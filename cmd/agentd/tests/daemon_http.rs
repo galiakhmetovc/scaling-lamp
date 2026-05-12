@@ -302,6 +302,50 @@ fn daemon_http_can_create_a_session_for_agent_profile() {
 }
 
 #[test]
+fn daemon_http_can_page_sessions_with_query_params() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let store = app.store().expect("open store");
+    for (index, updated_at) in [10_i64, 30, 20].into_iter().enumerate() {
+        store
+            .put_session(&SessionRecord {
+                id: format!("session-page-{index}"),
+                title: format!("Paged {index}"),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
+                agent_profile_id: "default".to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: updated_at,
+                updated_at,
+            })
+            .expect("put session");
+    }
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+    let response = client
+        .get(format!("{base_url}/v1/sessions?limit=2&offset=1"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("list sessions");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let sessions: Vec<SessionSummaryResponse> = response.json().expect("sessions json");
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session-page-2", "session-page-0"]
+    );
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn daemon_http_can_render_session_debug_view() {
     let (_temp, app, base_url) = test_app(Some("secret-token"));
     let store = app.store().expect("open store");

@@ -33,8 +33,16 @@ export const api = {
   snapshot(signal?: AbortSignal) {
     return requestJson<WebSnapshot>(endpoint("/v1/web/snapshot"), { signal });
   },
-  sessions(signal?: AbortSignal) {
-    return requestJson<SessionSummary[]>(endpoint("/v1/sessions"), { signal });
+  sessions(limit?: number, offset?: number, signal?: AbortSignal) {
+    const params = new URLSearchParams();
+    if (limit) {
+      params.set("limit", String(limit));
+    }
+    if (offset) {
+      params.set("offset", String(offset));
+    }
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    return requestJson<SessionSummary[]>(endpoint(`/v1/sessions${query}`), { signal });
   },
   createSession(title: string, agentIdentifier?: string) {
     return requestJson<SessionSummary>(endpoint("/v1/sessions"), {
@@ -93,6 +101,11 @@ export const api = {
   cancelAllWork(sessionId: string) {
     return requestJson<unknown>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/cancel-all-work`), {
       method: "POST"
+    });
+  },
+  deleteSession(sessionId: string) {
+    return requestJson<{ deleted: boolean }>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}`), {
+      method: "DELETE"
     });
   }
 };

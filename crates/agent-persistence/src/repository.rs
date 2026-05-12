@@ -42,6 +42,14 @@ pub trait SessionRepository {
     fn put_session(&self, record: &SessionRecord) -> Result<(), StoreError>;
     fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, StoreError>;
     fn list_sessions(&self) -> Result<Vec<SessionRecord>, StoreError>;
+    fn list_sessions_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SessionRecord>, StoreError> {
+        let sessions = self.list_sessions()?;
+        Ok(sessions.into_iter().skip(offset).take(limit).collect())
+    }
     fn delete_session(&self, id: &str) -> Result<bool, StoreError>;
 }
 
