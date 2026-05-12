@@ -2,8 +2,9 @@ use crate::bootstrap::App;
 use crate::event_bus::{EventEnvelope, EventPayloadRef, EventSubjects, build_event_envelope};
 use crate::event_errors::{EventErrorKind, EventRetryPolicy, EventRuntimeError};
 use agent_persistence::{
-    EventOutboxRecord, EventRepository, InboundEventRecord, RoutedEventRecord, RouterRepository,
-    RouterRuleRecord,
+    DeliveryRepository, EventOutboxRecord, EventRepository, InboundEventRecord, PersistenceStore,
+    RoutedEventRecord, RouterRepository, RouterRuleRecord, SessionOutputRouteRecord,
+    TranscriptRepository,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -105,6 +106,7 @@ pub fn route_inbound_event(
             format!("no route matched inbound event {}", inbound.event_id),
         ));
     };
+    materialize_output_routes(&store, &inbound, &rule, &decision, now)?;
 
     let routed_event_id = format!("routed-{}", inbound.event_id);
     let subjects = EventSubjects::from_config(&app.config.event_bus);
@@ -215,12 +217,27 @@ fn route_decision_from_rule(rule: &RouterRuleRecord) -> Result<RouteDecision, Ro
         queue_policy: policy.queue_policy.unwrap_or_else(|| "fifo".to_string()),
         priority: rule.priority,
         output_targets: policy.output_targets.unwrap_or_default(),
-        format_policy: policy.format_policy.unwrap_or_else(|| "full".to_string()),
+        format_policy: normalize_format_policy(policy.format_policy.as_deref(), &rule.rule_id)?,
         tool_policy: policy.tool_policy.unwrap_or_else(|| json!({})),
         retry_policy: policy.retry_policy.unwrap_or_else(|| json!({})),
         labels: policy.labels.unwrap_or_default(),
         matched_rule_id: Some(rule.rule_id.clone()),
     })
+}
+
+fn normalize_format_policy(value: Option<&str>, rule_id: &str) -> Result<String, RouteError> {
+    match value.unwrap_or("full_text").trim() {
+        "full" | "full_text" => Ok("full_text".to_string()),
+        "summary" => Ok("summary".to_string()),
+        "status_only" => Ok("status_only".to_string()),
+        "errors_only" => Ok("errors_only".to_string()),
+        other => Err(RouteError::new(
+            RouteErrorKind::InvalidPolicy,
+            format!(
+                "route rule {rule_id} has unsupported format_policy {other:?}; expected full_text|summary|status_only|errors_only"
+            ),
+        )),
+    }
 }
 
 fn required_policy_field(
@@ -236,6 +253,106 @@ fn required_policy_field(
                 format!("route rule {rule_id} is missing {field}"),
             )
         })
+}
+
+fn materialize_output_routes(
+    store: &PersistenceStore,
+    inbound: &InboundEventRecord,
+    rule: &RouterRuleRecord,
+    decision: &RouteDecision,
+    now: i64,
+) -> Result<(), RouteError> {
+    if decision.output_targets.is_empty() {
+        return Ok(());
+    }
+    let latest_transcript = store
+        .get_latest_transcript_for_session(&decision.session_id)
+        .map_err(|error| RouteError::new(RouteErrorKind::Store, error.to_string()))?;
+    let latest_created_at = latest_transcript
+        .as_ref()
+        .map(|transcript| transcript.created_at);
+    let latest_id = latest_transcript
+        .as_ref()
+        .map(|transcript| transcript.id.clone());
+
+    for target_id in &decision.output_targets {
+        if store
+            .get_delivery_target(target_id)
+            .map_err(|error| RouteError::new(RouteErrorKind::Store, error.to_string()))?
+            .is_none()
+        {
+            return Err(RouteError::new(
+                RouteErrorKind::InvalidPolicy,
+                format!(
+                    "route rule {} references missing delivery target {}",
+                    rule.rule_id, target_id
+                ),
+            ));
+        }
+        let canonical_route_id = format!("route-{}-{}", decision.session_id, target_id);
+        let existing = find_existing_output_route(
+            store,
+            &decision.session_id,
+            target_id,
+            &canonical_route_id,
+        )?;
+        let route_id = existing
+            .as_ref()
+            .map(|route| route.route_id.clone())
+            .unwrap_or(canonical_route_id);
+        let record = SessionOutputRouteRecord {
+            route_id,
+            session_id: decision.session_id.clone(),
+            target_id: target_id.clone(),
+            filter_json: json!({
+                "source": "router_rule",
+                "rule_id": rule.rule_id,
+                "inbound_event_id": inbound.event_id,
+            })
+            .to_string(),
+            format_policy: decision.format_policy.clone(),
+            enabled: true,
+            last_delivered_transcript_created_at: existing
+                .as_ref()
+                .and_then(|route| route.last_delivered_transcript_created_at)
+                .or(latest_created_at)
+                .or(Some(0)),
+            last_delivered_transcript_id: existing
+                .as_ref()
+                .and_then(|route| route.last_delivered_transcript_id.clone())
+                .or_else(|| latest_id.clone())
+                .or_else(|| Some(String::new())),
+            created_at: existing
+                .as_ref()
+                .map(|route| route.created_at)
+                .unwrap_or(now),
+            updated_at: now,
+        };
+        store
+            .put_session_output_route(&record)
+            .map_err(|error| RouteError::new(RouteErrorKind::Store, error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn find_existing_output_route(
+    store: &PersistenceStore,
+    session_id: &str,
+    target_id: &str,
+    canonical_route_id: &str,
+) -> Result<Option<SessionOutputRouteRecord>, RouteError> {
+    if let Some(route) = store
+        .get_session_output_route(canonical_route_id)
+        .map_err(|error| RouteError::new(RouteErrorKind::Store, error.to_string()))?
+    {
+        return Ok(Some(route));
+    }
+    let routes = store
+        .list_enabled_session_output_routes(session_id)
+        .map_err(|error| RouteError::new(RouteErrorKind::Store, error.to_string()))?;
+    Ok(routes
+        .into_iter()
+        .find(|route| route.target_id == target_id))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -293,12 +410,35 @@ fn condition_matches(
         return Ok(true);
     }
     let payload: Value = serde_json::from_str(&inbound.payload_json).unwrap_or_else(|_| json!({}));
-    if let Some(expected) = object.get("text_contains").and_then(Value::as_str) {
-        return Ok(payload
+    if let Some(expected) = object.get("text_contains").and_then(Value::as_str)
+        && !payload
             .get("text")
             .and_then(Value::as_str)
             .map(|text| text.contains(expected))
-            .unwrap_or(false));
+            .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    if let Some(expected_payload) = object.get("payload") {
+        let Some(expected_object) = expected_payload.as_object() else {
+            return Err(RouteError::new(
+                RouteErrorKind::InvalidPolicy,
+                "router condition payload must be an object",
+            ));
+        };
+        for (key, expected_value) in expected_object {
+            if payload.get(key) != Some(expected_value) {
+                return Ok(false);
+            }
+        }
+    }
+    for key in object.keys() {
+        if key != "text_contains" && key != "payload" {
+            return Err(RouteError::new(
+                RouteErrorKind::InvalidPolicy,
+                format!("unsupported router condition key {key:?}"),
+            ));
+        }
     }
     Ok(true)
 }

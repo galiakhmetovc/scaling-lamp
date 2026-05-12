@@ -326,8 +326,9 @@ Routing Engine применяет декларативные правила:
 route_rule {
   rule_id,
   source_filter,
+  operator_filter,
   condition,
-  outputs,
+  route_policy,
   priority,
   enabled
 }
@@ -342,7 +343,58 @@ IF severity=high THEN output=telegram_alerts + webhook_pager
 IF result.kind=artifact AND artifact.kind=report THEN output=original_chat + archive_channel
 ```
 
-Phase 1 может стартовать без полноценного expression language: достаточно явных session output routes и named delivery targets. Expression rules нужны после стабилизации target registry.
+Реализованный Phase 1 использует PostgreSQL-таблицу `router_rules`.
+
+`source_filter_json`:
+
+```json
+{"source_kind":"telegram","source_id":"telegram-chat-123"}
+```
+
+`operator_filter_json`:
+
+```json
+{"operator_id":"telegram-user-456"}
+```
+
+`condition_json` сейчас поддерживает два явных условия:
+
+```json
+{"text_contains":"status"}
+```
+
+```json
+{"payload":{"severity":"critical","task_type":"server_report"}}
+```
+
+Все поля `payload` сравниваются exact-match по верхнему уровню JSON payload. Неизвестные ключи condition считаются ошибкой конфигурации, чтобы правило не матчило “случайно всё”.
+
+`route_policy_json`:
+
+```json
+{
+  "session_id": "session-monitor",
+  "agent_id": "monitor",
+  "queue_policy": "priority",
+  "output_targets": ["telegram-ops"],
+  "format_policy": "summary",
+  "tool_policy": {},
+  "retry_policy": {},
+  "labels": ["monitoring"]
+}
+```
+
+При срабатывании правила router:
+
+- создаёт `routed_events` и outbox-событие `teamd.session.<session_id>.input`;
+- переносит `output_targets`, `format_policy`, policies и labels в routed metadata;
+- для каждого `output_target` создаёт или обновляет `session_output_routes`;
+- проверяет, что delivery target уже зарегистрирован;
+- переиспользует существующий enabled route для той же пары `session_id` + `target_id`, даже если у route нестандартный `route_id`, чтобы не делать двойную доставку;
+- ставит cursor route на последний существующий transcript session, чтобы новый route не переотправлял старую историю;
+- нормализует legacy alias `format_policy="full"` в `full_text`.
+
+Это уже даёт декларативный input->session/agent и session->target flow без отдельного Telegram loop. Полноценный expression language пока не нужен: текущий слой намеренно простой, проверяемый и транспорт-neutral.
 
 ## Task Registry
 
@@ -585,6 +637,7 @@ schedule_create {
 4. Расширить pending assistant delivery: selected chat binding остаётся, но дополнительно работают output routes.
 5. Добавить task registry view поверх существующих jobs/schedules/inter-agent/delegate.
 6. Обновить tool definitions и prompts: agent-agent/delegate возвращают `task_id`, не требуют ожидания.
+7. Добавить декларативные `router_rules`: source/operator/payload condition -> session/agent/output targets.
 
 ### Phase 2: Event-driven backbone
 
@@ -612,6 +665,8 @@ schedule_create {
 6. delivery worker поверх `delivery_targets`/`session_output_routes`;
 7. task worker поверх `task_registry`/`teamd.task.*` для `message_agent`;
 8. e2e smoke `cmd/agentd/tests/event_runtime_smoke.rs`.
+
+Router rule теперь не только выбирает `session_id`/`agent_id`, но и материализует `output_targets` в реальные session output routes. Поэтому правило вида “сообщение пришло из monitoring input -> обработать session-monitor -> отправить summary в telegram-ops” работает через одну декларативную запись и существующий delivery worker.
 
 Phase 2 data flow:
 

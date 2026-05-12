@@ -1,6 +1,7 @@
 use agent_persistence::{
-    AppConfig, EventRepository, InboundEventRecord, PersistenceStore, RouterRepository,
-    RouterRuleRecord, SessionRecord, SessionRepository,
+    AppConfig, DeliveryRepository, DeliveryTargetRecord, EventRepository, InboundEventRecord,
+    PersistenceStore, RouterRepository, RouterRuleRecord, SessionOutputRouteRecord, SessionRecord,
+    SessionRepository, TranscriptRecord, TranscriptRepository,
 };
 use agent_runtime::session::SessionSettings;
 use agentd::bootstrap;
@@ -50,22 +51,63 @@ fn put_rule(
     operator_filter_json: &str,
     route_policy_json: &str,
 ) {
-    store
-        .put_router_rule(&RouterRuleRecord {
-            rule_id: rule_id.to_string(),
+    put_rule_spec(
+        store,
+        RuleSpec {
+            rule_id,
             priority,
             enabled,
-            source_filter_json: source_filter_json.to_string(),
-            operator_filter_json: operator_filter_json.to_string(),
-            condition_json: "{}".to_string(),
-            route_policy_json: route_policy_json.to_string(),
-            created_at: 100 + priority,
-            updated_at: 100 + priority,
+            source_filter_json,
+            operator_filter_json,
+            condition_json: "{}",
+            route_policy_json,
+        },
+    );
+}
+
+struct RuleSpec<'a> {
+    rule_id: &'a str,
+    priority: i64,
+    enabled: bool,
+    source_filter_json: &'a str,
+    operator_filter_json: &'a str,
+    condition_json: &'a str,
+    route_policy_json: &'a str,
+}
+
+fn put_rule_spec(store: &PersistenceStore, spec: RuleSpec<'_>) {
+    store
+        .put_router_rule(&RouterRuleRecord {
+            rule_id: spec.rule_id.to_string(),
+            priority: spec.priority,
+            enabled: spec.enabled,
+            source_filter_json: spec.source_filter_json.to_string(),
+            operator_filter_json: spec.operator_filter_json.to_string(),
+            condition_json: spec.condition_json.to_string(),
+            route_policy_json: spec.route_policy_json.to_string(),
+            created_at: 100 + spec.priority,
+            updated_at: 100 + spec.priority,
         })
         .expect("put router rule");
 }
 
 fn put_inbound(store: &PersistenceStore, event_id: &str, source_id: &str, operator_id: &str) {
+    put_inbound_payload(
+        store,
+        event_id,
+        source_id,
+        operator_id,
+        json!({"text": "hello"}),
+    );
+}
+
+fn put_inbound_payload(
+    store: &PersistenceStore,
+    event_id: &str,
+    source_id: &str,
+    operator_id: &str,
+    payload: serde_json::Value,
+) {
     store
         .put_inbound_event(&InboundEventRecord {
             event_id: event_id.to_string(),
@@ -73,7 +115,7 @@ fn put_inbound(store: &PersistenceStore, event_id: &str, source_id: &str, operat
             source_kind: "telegram".to_string(),
             source_id: source_id.to_string(),
             operator_id: Some(operator_id.to_string()),
-            payload_json: json!({"text": "hello"}).to_string(),
+            payload_json: payload.to_string(),
             metadata_json: json!({"trace_id": "trace-router"}).to_string(),
             status: "pending".to_string(),
             received_at: 110,
@@ -81,6 +123,42 @@ fn put_inbound(store: &PersistenceStore, event_id: &str, source_id: &str, operat
             error: None,
         })
         .expect("put inbound");
+}
+
+fn put_delivery_target(store: &PersistenceStore, target_id: &str) {
+    store
+        .put_delivery_target(&DeliveryTargetRecord {
+            target_id: target_id.to_string(),
+            kind: "telegram".to_string(),
+            address: "42".to_string(),
+            scope: "private".to_string(),
+            owner_user_id: Some("telegram-user-7".to_string()),
+            allowed_agent_ids_json: "[]".to_string(),
+            allowed_session_ids_json: "[]".to_string(),
+            send_policy_json: "{}".to_string(),
+            format_policy: "full_text".to_string(),
+            created_at: 100,
+            updated_at: 100,
+        })
+        .expect("put delivery target");
+}
+
+fn put_transcript(
+    store: &PersistenceStore,
+    session_id: &str,
+    transcript_id: &str,
+    created_at: i64,
+) {
+    store
+        .put_transcript(&TranscriptRecord {
+            id: transcript_id.to_string(),
+            session_id: session_id.to_string(),
+            run_id: None,
+            kind: "assistant".to_string(),
+            content: "old assistant output".to_string(),
+            created_at,
+        })
+        .expect("put transcript");
 }
 
 fn count_rows(app: &bootstrap::App, table: &str) -> i64 {
@@ -106,6 +184,7 @@ fn exact_chat_rule_routes_and_persists_routed_event_before_session_outbox() {
         "telegram-chat-42",
         "telegram-user-7",
     );
+    put_delivery_target(&store, "telegram-main");
     put_rule(
         &store,
         "rule-chat-42",
@@ -123,6 +202,7 @@ fn exact_chat_rule_routes_and_persists_routed_event_before_session_outbox() {
     assert_eq!(decision.agent_id, "default");
     assert_eq!(decision.queue_policy, "fifo");
     assert_eq!(decision.output_targets, vec!["telegram-main"]);
+    assert_eq!(decision.format_policy, "full_text");
     assert_eq!(decision.labels, vec!["chat-exact"]);
 
     let routed = store
@@ -142,6 +222,203 @@ fn exact_chat_rule_routes_and_persists_routed_event_before_session_outbox() {
         serde_json::from_str(&outbox.payload_json).expect("outbox envelope");
     assert_eq!(envelope["payload_ref"]["table"], "routed_events");
     assert_eq!(envelope["payload_ref"]["id"], "routed-event-chat-42");
+}
+
+#[test]
+fn output_targets_materialize_session_output_routes_with_latest_cursor() {
+    let (_temp, app) = test_app();
+    let store = store(&app);
+    put_session(&store, "session-chat-42");
+    put_inbound(
+        &store,
+        "event-chat-42",
+        "telegram-chat-42",
+        "telegram-user-7",
+    );
+    put_transcript(&store, "session-chat-42", "transcript-old", 111);
+    put_delivery_target(&store, "telegram-main");
+    put_rule(
+        &store,
+        "rule-chat-42",
+        10,
+        true,
+        r#"{"source_id":"telegram-chat-42"}"#,
+        "{}",
+        r#"{"session_id":"session-chat-42","agent_id":"default","output_targets":["telegram-main"],"format_policy":"summary"}"#,
+    );
+
+    let decision = route_inbound_event(&app, "event-chat-42", 120).expect("route inbound");
+
+    assert_eq!(decision.output_targets, vec!["telegram-main"]);
+    assert_eq!(decision.format_policy, "summary");
+    let route = store
+        .get_session_output_route("route-session-chat-42-telegram-main")
+        .expect("get output route")
+        .expect("output route exists");
+    assert_eq!(route.session_id, "session-chat-42");
+    assert_eq!(route.target_id, "telegram-main");
+    assert_eq!(route.format_policy, "summary");
+    assert!(route.enabled);
+    assert_eq!(route.last_delivered_transcript_created_at, Some(111));
+    assert_eq!(
+        route.last_delivered_transcript_id.as_deref(),
+        Some("transcript-old")
+    );
+    assert_eq!(route.created_at, 120);
+    assert_eq!(route.updated_at, 120);
+    let filter: serde_json::Value = serde_json::from_str(&route.filter_json).expect("route filter");
+    assert_eq!(filter["source"], "router_rule");
+    assert_eq!(filter["rule_id"], "rule-chat-42");
+    assert_eq!(filter["inbound_event_id"], "event-chat-42");
+}
+
+#[test]
+fn output_targets_reuse_existing_route_for_same_session_and_target() {
+    let (_temp, app) = test_app();
+    let store = store(&app);
+    put_session(&store, "session-chat-42");
+    put_inbound(
+        &store,
+        "event-chat-42",
+        "telegram-chat-42",
+        "telegram-user-7",
+    );
+    put_delivery_target(&store, "telegram-main");
+    store
+        .put_session_output_route(&SessionOutputRouteRecord {
+            route_id: "custom-route".to_string(),
+            session_id: "session-chat-42".to_string(),
+            target_id: "telegram-main".to_string(),
+            filter_json: "{}".to_string(),
+            format_policy: "full_text".to_string(),
+            enabled: true,
+            last_delivered_transcript_created_at: Some(88),
+            last_delivered_transcript_id: Some("transcript-delivered".to_string()),
+            created_at: 90,
+            updated_at: 90,
+        })
+        .expect("put existing route");
+    put_rule(
+        &store,
+        "rule-chat-42",
+        10,
+        true,
+        r#"{"source_id":"telegram-chat-42"}"#,
+        "{}",
+        r#"{"session_id":"session-chat-42","agent_id":"default","output_targets":["telegram-main"],"format_policy":"summary"}"#,
+    );
+
+    route_inbound_event(&app, "event-chat-42", 120).expect("route inbound");
+
+    assert!(
+        store
+            .get_session_output_route("route-session-chat-42-telegram-main")
+            .expect("get canonical route")
+            .is_none()
+    );
+    let route = store
+        .get_session_output_route("custom-route")
+        .expect("get existing route")
+        .expect("existing route remains");
+    assert_eq!(route.format_policy, "summary");
+    assert_eq!(route.last_delivered_transcript_created_at, Some(88));
+    assert_eq!(
+        route.last_delivered_transcript_id.as_deref(),
+        Some("transcript-delivered")
+    );
+    assert_eq!(route.created_at, 90);
+    assert_eq!(route.updated_at, 120);
+}
+
+#[test]
+fn output_target_policy_rejects_missing_delivery_target() {
+    let (_temp, app) = test_app();
+    let store = store(&app);
+    put_session(&store, "session-chat-42");
+    put_inbound(
+        &store,
+        "event-chat-42",
+        "telegram-chat-42",
+        "telegram-user-7",
+    );
+    put_rule(
+        &store,
+        "rule-chat-42",
+        10,
+        true,
+        r#"{"source_id":"telegram-chat-42"}"#,
+        "{}",
+        r#"{"session_id":"session-chat-42","agent_id":"default","output_targets":["telegram-missing"],"format_policy":"summary"}"#,
+    );
+
+    let error = route_inbound_event(&app, "event-chat-42", 120).expect_err("route failure");
+
+    assert_eq!(error.kind(), RouteErrorKind::InvalidPolicy);
+    assert_eq!(count_rows(&app, "routed_events"), 0);
+    assert_eq!(count_rows(&app, "event_outbox"), 0);
+    assert!(
+        store
+            .get_session_output_route("route-session-chat-42-telegram-missing")
+            .expect("get route")
+            .is_none()
+    );
+}
+
+#[test]
+fn payload_condition_routes_structured_events() {
+    let (_temp, app) = test_app();
+    let store = store(&app);
+    put_session(&store, "session-alerts");
+    put_session(&store, "session-default");
+    put_inbound_payload(
+        &store,
+        "event-alert",
+        "monitoring-events",
+        "system",
+        json!({"text":"disk pressure","severity":"critical","task_type":"server_report"}),
+    );
+    put_inbound_payload(
+        &store,
+        "event-warning",
+        "monitoring-events",
+        "system",
+        json!({"text":"disk warning","severity":"warning","task_type":"server_report"}),
+    );
+    put_rule_spec(
+        &store,
+        RuleSpec {
+            rule_id: "rule-critical-monitoring",
+            priority: 10,
+            enabled: true,
+            source_filter_json: r#"{"source_id":"monitoring-events"}"#,
+            operator_filter_json: "{}",
+            condition_json: r#"{"payload":{"severity":"critical","task_type":"server_report"}}"#,
+            route_policy_json: r#"{"session_id":"session-alerts","agent_id":"default","queue_policy":"priority","labels":["monitoring"]}"#,
+        },
+    );
+    put_rule(
+        &store,
+        "rule-default",
+        1000,
+        true,
+        "{}",
+        "{}",
+        r#"{"session_id":"session-default","agent_id":"default"}"#,
+    );
+
+    let decision = route_inbound_event(&app, "event-alert", 120).expect("route inbound");
+
+    assert_eq!(
+        decision.matched_rule_id.as_deref(),
+        Some("rule-critical-monitoring")
+    );
+    assert_eq!(decision.session_id, "session-alerts");
+    assert_eq!(decision.queue_policy, "priority");
+    assert_eq!(decision.labels, vec!["monitoring"]);
+
+    let fallback = route_inbound_event(&app, "event-warning", 121).expect("route warning");
+    assert_eq!(fallback.matched_rule_id.as_deref(), Some("rule-default"));
+    assert_eq!(fallback.session_id, "session-default");
 }
 
 #[test]

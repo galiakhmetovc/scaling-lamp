@@ -113,6 +113,7 @@ cargo build --release -p agentd
 | Canonical chat path | `App -> ExecutionService -> ProviderLoop -> transcript/run/tool ledger`. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test bootstrap_app chat` |
 | Prompt/context/offload | Prompt budget, compaction, context summary, offload refs/artifacts. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test bootstrap_app context` |
 | Telegram surface | Pairing, commands, queue/coalescing, status, files, delivery. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test telegram_surface` |
+| MIMO router rules | Source/operator/payload route matching, output target validation, session output route materialization. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test router_worker` |
 | MIMO event runtime | Telegram webhook ingress, route decision, canonical session turn, delivery worker, dedupe, task registry, trace propagation. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test event_runtime_smoke` |
 | TUI local/debug | TUI state, render, debug browser, session/tool/artifact views. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test tui_app` |
 | TUI через daemon | `TUI -> daemon client -> HTTP daemon -> runtime` contract. | `CARGO_INCREMENTAL=0 cargo test -p agentd --test daemon_tui` |
