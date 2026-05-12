@@ -574,6 +574,7 @@ https://<single-domain>/jaeger/
 - SearXNG и Jaeger в этой схеме не имеют пользовательской авторизации. Не публикуйте их наружу без reverse-proxy auth/firewall/VPN, если сервер доступен не только вам.
 - MCP wrappers требуют Docker access для `teamd`, потому что `agentd` запускает stdio bridge через Docker. Это сильное право; выдавайте его только trusted runtime user.
 - Secrets лежат в env files под `/opt/teamd/containers/*/*.env`, а не в git.
+- Web Console Basic Auth включается на native `teamd-web` server через `TEAMD_WEB_AUTH_USER` и `TEAMD_WEB_AUTH_PASSWORD`; это закрывает и UI, и proxy `/api/agentd/*`.
 
 ## Проверка после deploy
 

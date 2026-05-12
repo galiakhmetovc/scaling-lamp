@@ -107,6 +107,10 @@ Caddy должен проксировать:
 - `TEAMD_AGENTD_BASE_URL` — URL демона, по умолчанию `http://127.0.0.1:5140`;
 - `TEAMD_AGENTD_TOKEN` — bearer token для `agentd`, если включена авторизация;
 - `TEAMD_AGENTD_TIMEOUT_MS` — timeout proxy-запросов, по умолчанию `120000`.
+- `TEAMD_WEB_AUTH_USER` и `TEAMD_WEB_AUTH_PASSWORD` — включают HTTP Basic Auth для всего web console, включая `/web/` и `/api/agentd/*`;
+- `TEAMD_WEB_AUTH_REALM` — optional realm для Basic Auth prompt, по умолчанию `teamD Web Console`.
+
+Если `TEAMD_WEB_AUTH_USER` или `TEAMD_WEB_AUTH_PASSWORD` не заданы, Basic Auth отключён. Production deployment должен задавать оба значения через root-owned env file или systemd drop-in, а не через frontend bundle.
 
 ## Текущий статус
 
