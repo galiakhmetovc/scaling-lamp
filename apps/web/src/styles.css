@@ -41,14 +41,20 @@ body {
 
 .session-layout {
   display: grid;
-  grid-template-columns: minmax(360px, 0.86fr) minmax(520px, 1.4fr);
+  grid-template-columns: minmax(300px, 0.72fr) minmax(520px, 1.2fr) minmax(320px, 0.8fr);
   gap: 16px;
   align-items: start;
 }
 
 .session-list,
-.session-detail {
+.session-workspace,
+.session-inspector {
   min-width: 0;
+}
+
+.session-inspector {
+  position: sticky;
+  top: 68px;
 }
 
 .mono {
@@ -88,6 +94,87 @@ body {
   color: rgba(255, 255, 255, 0.72);
 }
 
+.timeline-panel {
+  overflow: hidden;
+}
+
+.timeline-event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.timeline-event:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.timeline-event.is-selected {
+  background: rgba(121, 199, 183, 0.1);
+}
+
+.timeline-marker {
+  position: relative;
+  margin-top: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #79c7b7;
+  box-shadow: 0 0 0 4px rgba(121, 199, 183, 0.14);
+}
+
+.timeline-event::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 17px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.timeline-body {
+  min-width: 0;
+}
+
+.timeline-preview {
+  display: -webkit-box;
+  max-height: 62px;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.inspector-panel {
+  max-height: calc(100vh - 92px);
+  overflow: auto;
+}
+
+.inspector-detail {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  color: rgba(255, 255, 255, 0.78);
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .json-block {
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -107,6 +194,10 @@ body {
   .grid-two,
   .session-layout {
     grid-template-columns: 1fr;
+  }
+
+  .session-inspector {
+    position: static;
   }
 
   .sidebar {

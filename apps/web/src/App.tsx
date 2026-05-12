@@ -54,7 +54,19 @@ import type {
 } from "./types";
 
 type SectionId = "overview" | "sessions" | "agents" | "tasks" | "tools" | "routes" | "traces" | "settings";
-type SessionPane = "transcript" | "debug" | "tasks" | "run";
+type SessionPane = "timeline" | "transcript" | "debug" | "tasks" | "run";
+
+type SessionEvent = {
+  id: string;
+  kind: string;
+  label: string;
+  detailTitle: string;
+  detail: string;
+  createdAt: number;
+  runId?: string | null;
+  artifactId?: string | null;
+  source: "debug" | "transcript";
+};
 
 const drawerWidth = 276;
 
@@ -272,6 +284,57 @@ function JsonBlock({ value }: { value: unknown }) {
   return <pre className="json-block">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre>;
 }
 
+function eventTone(kind: string): "primary" | "secondary" | "warning" | "success" | "error" | "default" {
+  const normalized = kind.toLowerCase();
+  if (normalized.includes("tool")) {
+    return "warning";
+  }
+  if (normalized.includes("artifact")) {
+    return "secondary";
+  }
+  if (normalized.includes("assistant")) {
+    return "primary";
+  }
+  if (normalized.includes("user")) {
+    return "success";
+  }
+  if (normalized.includes("error") || normalized.includes("failed")) {
+    return "error";
+  }
+  return "default";
+}
+
+function buildSessionEvents(debug: SessionDebug | null, transcript: SessionTranscript | null): SessionEvent[] {
+  if (debug?.entries.length) {
+    return debug.entries
+      .map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+        label: entry.label,
+        detailTitle: entry.detail_title,
+        detail: entry.detail,
+        createdAt: entry.created_at,
+        runId: entry.run_id,
+        artifactId: entry.artifact_id,
+        source: "debug" as const
+      }))
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  }
+
+  return (transcript?.entries ?? [])
+    .map((entry, index) => ({
+      id: `transcript-${entry.created_at}-${index}`,
+      kind: entry.tool_name ? "tool" : entry.role,
+      label: entry.tool_name ?? entry.role,
+      detailTitle: entry.tool_status ? `${entry.tool_name ?? "tool"} · ${entry.tool_status}` : entry.role,
+      detail: entry.content,
+      createdAt: entry.created_at,
+      runId: entry.run_id,
+      source: "transcript" as const
+    }))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+}
+
 function SessionsTable({
   sessions,
   selectedId,
@@ -429,6 +492,199 @@ function DebugPane({ debug }: { debug: SessionDebug | null }) {
         </TableBody>
       </Table>
     </TableContainer>
+  );
+}
+
+function SessionTimeline({
+  events,
+  selectedEventId,
+  onSelectEvent
+}: {
+  events: SessionEvent[];
+  selectedEventId: string | null;
+  onSelectEvent: (id: string) => void;
+}) {
+  if (events.length === 0) {
+    return <EmptyState title="Timeline пуст" detail="Нет transcript/debug событий для выбранной сессии." />;
+  }
+
+  return (
+    <Paper variant="outlined" className="timeline-panel">
+      <Stack divider={<Divider flexItem />} spacing={0}>
+        {events.map((event) => (
+          <Box
+            key={event.id}
+            component="button"
+            type="button"
+            className={`timeline-event ${event.id === selectedEventId ? "is-selected" : ""}`}
+            onClick={() => onSelectEvent(event.id)}
+          >
+            <Box className="timeline-marker" />
+            <Box className="timeline-body">
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Chip label={event.kind} color={eventTone(event.kind)} variant="outlined" />
+                <Typography variant="caption" color="text.secondary">
+                  {formatTime(event.createdAt)}
+                </Typography>
+                {event.runId ? (
+                  <Typography variant="caption" color="text.secondary" className="mono">
+                    run {short(event.runId, 18)}
+                  </Typography>
+                ) : null}
+                {event.artifactId ? (
+                  <Typography variant="caption" color="text.secondary" className="mono">
+                    artifact {short(event.artifactId, 18)}
+                  </Typography>
+                ) : null}
+              </Stack>
+              <Typography fontWeight={700} sx={{ mt: 0.75 }}>
+                {event.label || event.detailTitle}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" noWrap>
+                {event.detailTitle}
+              </Typography>
+              <Typography component="pre" className="timeline-preview">
+                {event.detail}
+              </Typography>
+            </Box>
+          </Box>
+        ))}
+      </Stack>
+    </Paper>
+  );
+}
+
+function KeyValueTable({ rows }: { rows: Array<[string, ReactNode]> }) {
+  return (
+    <Table size="small">
+      <TableBody>
+        {rows.map(([label, value]) => (
+          <TableRow key={label}>
+            <TableCell sx={{ width: 118, color: "text.secondary" }}>{label}</TableCell>
+            <TableCell>{value}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function SessionInspector({
+  session,
+  selectedEvent,
+  tasks,
+  tools,
+  run,
+  onRefresh,
+  onCancelRun,
+  onCancelAll
+}: {
+  session: SessionSummary | null;
+  selectedEvent: SessionEvent | null;
+  tasks: SessionTask[];
+  tools: ToolCallSummary[];
+  run: unknown;
+  onRefresh: () => void;
+  onCancelRun: () => void;
+  onCancelAll: () => void;
+}) {
+  if (!session) {
+    return <EmptyState title="Inspector пуст" detail="Выбери сессию." />;
+  }
+
+  const sessionTools = tools.filter((tool) => tool.session_id === session.id);
+  const failedTools = sessionTools.filter((tool) => tool.status !== "completed" || tool.error);
+  const activeTasks = tasks.filter((task) => ["queued", "running", "in_progress"].includes(task.status));
+
+  return (
+    <Stack spacing={1.5} className="inspector-panel">
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary">
+              Выбранная сессия
+            </Typography>
+            <Typography fontWeight={800}>{session.title || "Без названия"}</Typography>
+            <Typography variant="caption" color="text.secondary" className="mono">
+              {session.id}
+            </Typography>
+          </Box>
+          <Button variant="outlined" onClick={onRefresh}>
+            Refresh
+          </Button>
+        </Stack>
+        <Divider sx={{ my: 1.25 }} />
+        <KeyValueTable
+          rows={[
+            ["Агент", `${session.agent_name} (${session.agent_profile_id})`],
+            ["Модель", session.model || "—"],
+            ["Сообщения", session.message_count],
+            ["Контекст", session.context_tokens],
+            ["Compact", session.compactifications],
+            ["Auto approve", session.auto_approve ? "да" : "нет"],
+            ["Обновлена", formatTime(session.updated_at)]
+          ]}
+        />
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Typography fontWeight={700} sx={{ mb: 1 }}>
+          Оперативное состояние
+        </Typography>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          <Chip label={`tasks: ${tasks.length}`} variant="outlined" />
+          <Chip label={`active: ${activeTasks.length}`} color={activeTasks.length > 0 ? "warning" : "default"} variant="outlined" />
+          <Chip label={`tools: ${sessionTools.length}`} variant="outlined" />
+          <Chip label={`tool errors: ${failedTools.length}`} color={failedTools.length > 0 ? "error" : "default"} variant="outlined" />
+          {session.has_pending_approval ? <Chip label="approval pending" color="warning" /> : null}
+        </Stack>
+        <Stack direction="row" spacing={1} sx={{ mt: 1.25 }}>
+          <Button color="warning" variant="outlined" onClick={onCancelRun}>
+            Stop run
+          </Button>
+          <Button color="error" variant="outlined" onClick={onCancelAll}>
+            Cancel all
+          </Button>
+        </Stack>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Typography fontWeight={700} sx={{ mb: 1 }}>
+          Выбранное событие
+        </Typography>
+        {selectedEvent ? (
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Chip label={selectedEvent.kind} color={eventTone(selectedEvent.kind)} variant="outlined" />
+              <Typography variant="caption" color="text.secondary">
+                {formatTime(selectedEvent.createdAt)}
+              </Typography>
+            </Stack>
+            <Typography fontWeight={700}>{selectedEvent.label}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {selectedEvent.detailTitle}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" className="mono">
+              {selectedEvent.id}
+            </Typography>
+            <Typography component="pre" className="inspector-detail">
+              {selectedEvent.detail}
+            </Typography>
+          </Stack>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            Выбери событие в timeline.
+          </Typography>
+        )}
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Typography fontWeight={700} sx={{ mb: 1 }}>
+          Active run raw
+        </Typography>
+        <JsonBlock value={run ?? "Нет активного run."} />
+      </Paper>
+    </Stack>
   );
 }
 
@@ -788,7 +1044,8 @@ export function App() {
   const [debug, setDebug] = useState<SessionDebug | null>(null);
   const [tasks, setTasks] = useState<SessionTask[]>([]);
   const [run, setRun] = useState<unknown>(null);
-  const [sessionPane, setSessionPane] = useState<SessionPane>("transcript");
+  const [sessionPane, setSessionPane] = useState<SessionPane>("timeline");
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -870,6 +1127,7 @@ export function App() {
       setDebug(null);
       setTasks([]);
       setRun(null);
+      setSelectedEventId(null);
       return;
     }
     const controller = new AbortController();
@@ -880,6 +1138,22 @@ export function App() {
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
   const toolErrors = snapshot?.recent_tool_calls.filter((tool) => tool.status !== "completed" || tool.error).length ?? 0;
   const activeRuns = snapshot?.recent_runs.filter((runItem) => ["running", "queued"].includes(runItem.status)).length ?? 0;
+  const sessionEvents = buildSessionEvents(debug, transcript);
+  const selectedEvent =
+    sessionEvents.find((event) => event.id === selectedEventId) ?? sessionEvents[sessionEvents.length - 1] ?? null;
+
+  useEffect(() => {
+    if (sessionEvents.length === 0) {
+      setSelectedEventId(null);
+      return;
+    }
+    setSelectedEventId((current) => {
+      if (current && sessionEvents.some((event) => event.id === current)) {
+        return current;
+      }
+      return sessionEvents[sessionEvents.length - 1].id;
+    });
+  }, [debug, transcript]);
 
   async function submitMessage() {
     const trimmed = message.trim();
@@ -1052,7 +1326,7 @@ export function App() {
       <Stack spacing={2}>
         <SectionHeader
           title="Сессии"
-          subtitle="Единый операторский экран: список, transcript, debug, task registry и отправка сообщения через canonical /v1/chat/turn."
+          subtitle="Операторский экран: список → timeline → inspector. Сообщения идут только через canonical /v1/chat/turn."
           action={
             <Stack direction="row" spacing={1}>
               <Button variant="outlined" onClick={() => void loadData()} disabled={loading}>
@@ -1074,7 +1348,7 @@ export function App() {
               onSelect={setSelectedSessionId}
             />
           </Box>
-          <Box className="session-detail">
+          <Box className="session-workspace">
             {selectedSession ? (
               <Stack spacing={1.5}>
                 <Paper variant="outlined" sx={{ p: 1.5 }}>
@@ -1089,14 +1363,11 @@ export function App() {
                         {selectedSession.has_pending_approval ? <Chip label="approval pending" color="warning" /> : null}
                       </Stack>
                     </Box>
-                    <Stack direction="row" spacing={1}>
-                      <Button variant="outlined" color="warning" onClick={() => void cancelRun(false)}>
-                        Stop run
-                      </Button>
-                      <Button variant="outlined" color="error" onClick={() => void cancelRun(true)}>
-                        Cancel all
-                      </Button>
-                    </Stack>
+                    <Typography variant="caption" color="text.secondary" textAlign="right">
+                      Обновлена
+                      <br />
+                      {formatTime(selectedSession.updated_at)}
+                    </Typography>
                   </Stack>
                 </Paper>
 
@@ -1129,6 +1400,7 @@ export function App() {
                     variant="scrollable"
                     scrollButtons="auto"
                   >
+                    <Tab value="timeline" label={`Timeline (${sessionEvents.length})`} />
                     <Tab value="transcript" label="Transcript" />
                     <Tab value="debug" label="Debug" />
                     <Tab value="tasks" label={`Tasks (${tasks.length})`} />
@@ -1138,6 +1410,9 @@ export function App() {
 
                 {detailLoading ? <LinearProgress /> : null}
                 {detailError ? <Alert severity="error">{detailError}</Alert> : null}
+                {sessionPane === "timeline" ? (
+                  <SessionTimeline events={sessionEvents} selectedEventId={selectedEvent?.id ?? null} onSelectEvent={setSelectedEventId} />
+                ) : null}
                 {sessionPane === "transcript" ? <TranscriptPane transcript={transcript} /> : null}
                 {sessionPane === "debug" ? <DebugPane debug={debug} /> : null}
                 {sessionPane === "tasks" ? <TasksPane tasks={tasks} /> : null}
@@ -1146,6 +1421,23 @@ export function App() {
             ) : (
               <EmptyState title="Сессия не выбрана" detail="Выбери сессию слева или создай новую." />
             )}
+          </Box>
+          <Box className="session-inspector">
+            <SessionInspector
+              session={selectedSession}
+              selectedEvent={selectedEvent}
+              tasks={tasks}
+              tools={snapshot?.recent_tool_calls ?? []}
+              run={run}
+              onRefresh={() => {
+                if (selectedSessionId) {
+                  void loadSessionDetails(selectedSessionId);
+                }
+                void loadData();
+              }}
+              onCancelRun={() => void cancelRun(false)}
+              onCancelAll={() => void cancelRun(true)}
+            />
           </Box>
         </Box>
       </Stack>

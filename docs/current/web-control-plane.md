@@ -95,7 +95,9 @@ TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 node server.mjs
 - native React/Vite/MUI приложение;
 - Node static server + reverse proxy к `agentd`;
 - обзор runtime;
-- сессии: список, фильтр, transcript, debug, tasks, active run;
+- сессии: трёхпанельный операторский экран `список -> timeline -> inspector`;
+- session timeline: единая лента сообщений, tool calls и артефактов из canonical debug/transcript data;
+- session inspector: выбранная сессия, оперативные счётчики, выбранное событие, active run;
 - отправка сообщения через `/v1/chat/turn`;
 - создание сессии;
 - агенты: список и создание profile через `/v1/agents`;
@@ -113,7 +115,7 @@ TEAMD_AGENTD_BASE_URL=http://127.0.0.1:5140 node server.mjs
 
 1. Добавить agent profile file API: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
 2. Добавить управление доступными tools и skills на профиль агента.
-3. Добавить review-flow для tool calls: detail pane, arguments, result preview, artifact link.
+3. Расширить review-flow для tool calls: arguments, stdout/stderr, result preview, artifact link, replay/copy.
 4. Добавить route editor для delivery targets и session output routes.
 5. Добавить task registry actions: cancel, restart, follow.
 6. Добавить Telegram/chat bindings editor.
