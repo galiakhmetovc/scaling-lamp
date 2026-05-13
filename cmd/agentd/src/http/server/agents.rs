@@ -1,11 +1,14 @@
 use super::*;
+use crate::bootstrap::AgentProfileUpdatePatch;
 use crate::http::types::{
-    AgentCreateRequest, AgentFileEntryResponse, AgentFileReadResponse, AgentFileWriteRequest,
-    AgentFileWriteResponse, AgentFilesResponse, AgentRenderResponse, AgentResolveRequest,
-    AgentScheduleCreateRequest, AgentScheduleDetailResponse, AgentScheduleResolveRequest,
-    AgentScheduleUpdateRequest, AgentSelectRequest, AgentSummaryResponse, ErrorResponse,
+    AgentCreateRequest, AgentDeleteResponse, AgentDetailResponse, AgentFileEntryResponse,
+    AgentFileReadResponse, AgentFileWriteRequest, AgentFileWriteResponse, AgentFilesResponse,
+    AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
+    AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
+    AgentSelectRequest, AgentSummaryResponse, AgentUpdateRequest, ErrorResponse,
 };
 use agent_persistence::{AgentProfileRecord, AgentRepository};
+use agent_runtime::agent::AgentProfile;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -200,6 +203,9 @@ pub(super) fn handle_agent_nested_routes(app: &App, request: Request) -> std::io
         .map(str::to_string)
         .collect::<Vec<_>>();
     match (method, segments.as_slice()) {
+        (Method::Get, [agent_id]) => handle_agent_detail(app, request, agent_id),
+        (Method::Patch, [agent_id]) => handle_update_agent(app, request, agent_id),
+        (Method::Delete, [agent_id]) => handle_delete_agent(app, request, agent_id),
         (Method::Get, [agent_id, files]) if files == "files" => {
             handle_list_agent_files(app, request, agent_id)
         }
@@ -216,6 +222,62 @@ pub(super) fn handle_agent_nested_routes(app: &App, request: Request) -> std::io
                 error: "route not found".to_string(),
             },
         ),
+    }
+}
+
+fn handle_agent_detail(app: &App, request: Request, agent_id: &str) -> std::io::Result<()> {
+    match app.agent_profile(agent_id) {
+        Ok(profile) => respond_json(request, StatusCode(200), &agent_detail_response(profile)),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_update_agent(app: &App, mut request: Request, agent_id: &str) -> std::io::Result<()> {
+    let body = match parse_json_body::<AgentUpdateRequest>(&mut request) {
+        Ok(body) => body,
+        Err(error) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &ErrorResponse {
+                    error: format!("invalid agent update request: {error}"),
+                },
+            );
+        }
+    };
+    let patch = AgentProfileUpdatePatch {
+        name: body.name,
+        allowed_tools: body.allowed_tools,
+        default_workspace_root: body.default_workspace_root.map(|value| {
+            value.and_then(|path| {
+                let trimmed = path.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(trimmed))
+                }
+            })
+        }),
+    };
+    match app.update_agent_profile(agent_id, patch) {
+        Ok(profile) => respond_json(request, StatusCode(200), &agent_detail_response(profile)),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
+fn handle_delete_agent(app: &App, request: Request, agent_id: &str) -> std::io::Result<()> {
+    match app.delete_agent_profile(agent_id) {
+        Ok(deleted) => respond_json(request, StatusCode(200), &AgentDeleteResponse { deleted }),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
     }
 }
 
@@ -535,6 +597,24 @@ fn touch_agent_profile(
         &AgentProfileRecord::try_from(&*profile).map_err(BootstrapError::RecordConversion)?,
     )?;
     Ok(())
+}
+
+fn agent_detail_response(profile: AgentProfile) -> AgentDetailResponse {
+    AgentDetailResponse {
+        id: profile.id,
+        name: profile.name,
+        template_kind: profile.template_kind.as_str().to_string(),
+        agent_home: profile.agent_home.display().to_string(),
+        allowed_tools: profile.allowed_tools,
+        default_workspace_root: profile
+            .default_workspace_root
+            .map(|path| path.display().to_string()),
+        created_from_template_id: profile.created_from_template_id,
+        created_by_session_id: profile.created_by_session_id,
+        created_by_agent_profile_id: profile.created_by_agent_profile_id,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+    }
 }
 
 fn parse_agent_query(url: &str) -> BTreeMap<String, String> {

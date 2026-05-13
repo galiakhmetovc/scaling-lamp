@@ -4,7 +4,7 @@ import { api } from "./api";
 import { ConsoleShell } from "./components/ConsoleShell";
 import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { CreateSessionDialog } from "./components/CreateSessionDialog";
-import { AgentsTable } from "./features/agents/AgentsTable";
+import { AgentsScreen } from "./features/agents/AgentsScreen";
 import { ChatScreen } from "./features/chat/ChatScreen";
 import { FilesScreen } from "./features/files/FilesScreen";
 import { OverviewScreen } from "./features/overview/OverviewScreen";
@@ -501,10 +501,17 @@ export function App() {
         return <SkillsScreen selectedSession={selectedSession} />;
       case "agents":
         return (
-          <>
-            <SectionHeader title="Агенты" subtitle="Agent profiles из canonical runtime." />
-            <AgentsTable agents={snapshot?.agents ?? []} onCreate={() => setCreateAgentOpen(true)} />
-          </>
+          <AgentsScreen
+            agents={snapshot?.agents ?? []}
+            sessions={sessions}
+            loading={loading}
+            onCreateAgent={() => setCreateAgentOpen(true)}
+            onOpenSession={(sessionId) => {
+              setSelectedSessionId(sessionId);
+              setSection("chat");
+            }}
+            onRefresh={() => void loadData()}
+          />
         );
       case "tasks":
         return (

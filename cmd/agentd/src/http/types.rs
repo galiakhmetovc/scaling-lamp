@@ -405,6 +405,21 @@ pub struct AgentSummaryResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDetailResponse {
+    pub id: String,
+    pub name: String,
+    pub template_kind: String,
+    pub agent_home: String,
+    pub allowed_tools: Vec<String>,
+    pub default_workspace_root: Option<String>,
+    pub created_from_template_id: Option<String>,
+    pub created_by_session_id: Option<String>,
+    pub created_by_agent_profile_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSelectRequest {
     pub identifier: String,
 }
@@ -413,6 +428,21 @@ pub struct AgentSelectRequest {
 pub struct AgentCreateRequest {
     pub name: String,
     pub template_identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentUpdateRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub default_workspace_root: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDeleteResponse {
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

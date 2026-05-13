@@ -1,7 +1,9 @@
 import type {
+  AgentDetail,
   AgentFile,
   AgentFiles,
   AgentFileWriteResult,
+  AgentUpdatePatch,
   ArtifactFile,
   ArtifactFileSummary,
   PendingApproval,
@@ -84,6 +86,20 @@ export const api = {
         name,
         template_identifier: templateIdentifier || null
       })
+    });
+  },
+  agentDetail(agentId: string, signal?: AbortSignal) {
+    return requestJson<AgentDetail>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}`), { signal });
+  },
+  updateAgent(agentId: string, patch: AgentUpdatePatch) {
+    return requestJson<AgentDetail>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}`), {
+      method: "PATCH",
+      body: JSON.stringify(patch)
+    });
+  },
+  deleteAgent(agentId: string) {
+    return requestJson<{ deleted: boolean }>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}`), {
+      method: "DELETE"
     });
   },
   agentFiles(agentId: string, signal?: AbortSignal) {

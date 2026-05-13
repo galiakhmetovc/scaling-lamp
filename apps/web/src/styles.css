@@ -50,6 +50,13 @@ body {
   align-items: start;
 }
 
+.agents-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(560px, 1.35fr);
+  gap: 16px;
+  align-items: start;
+}
+
 .chat-layout {
   display: grid;
   grid-template-columns: 44px minmax(560px, 1fr) 44px;

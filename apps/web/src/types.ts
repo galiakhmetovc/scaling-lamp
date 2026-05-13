@@ -39,6 +39,26 @@ export type AgentSummary = {
   updated_at: number;
 };
 
+export type AgentDetail = {
+  id: string;
+  name: string;
+  template_kind: string;
+  agent_home: string;
+  allowed_tools: string[];
+  default_workspace_root?: string | null;
+  created_from_template_id?: string | null;
+  created_by_session_id?: string | null;
+  created_by_agent_profile_id?: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type AgentUpdatePatch = {
+  name?: string;
+  allowed_tools?: string[];
+  default_workspace_root?: string | null;
+};
+
 export type AgentFileEntry = {
   path: string;
   kind: string;

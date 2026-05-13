@@ -30,7 +30,7 @@ export function AgentSkillCardsEditor({
   agentId: string;
   skills: SessionSkillStatus[];
   loading: boolean;
-  onSetEnabled: (name: string, enabled: boolean) => void;
+  onSetEnabled?: (name: string, enabled: boolean) => void;
 }) {
   const [fileList, setFileList] = useState<AgentFiles | null>(null);
   const [selectedFile, setSelectedFile] = useState<AgentFile | null>(null);
@@ -198,31 +198,33 @@ export function AgentSkillCardsEditor({
                     <Chip label={`${file.byte_len} bytes`} variant="outlined" />
                     <Chip label={file.path} variant="outlined" className="mono" />
                   </Stack>
-                  <Stack direction="row" spacing={1}>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      disabled={loading || mode === "manual"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onSetEnabled(name, true);
-                      }}
-                    >
-                      Enable
-                    </Button>
-                    <Button
-                      size="small"
-                      color="warning"
-                      variant="outlined"
-                      disabled={loading || mode === "disabled"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onSetEnabled(name, false);
-                      }}
-                    >
-                      Disable
-                    </Button>
-                  </Stack>
+                  {onSetEnabled ? (
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={loading || mode === "manual"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSetEnabled(name, true);
+                        }}
+                      >
+                        Enable
+                      </Button>
+                      <Button
+                        size="small"
+                        color="warning"
+                        variant="outlined"
+                        disabled={loading || mode === "disabled"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSetEnabled(name, false);
+                        }}
+                      >
+                        Disable
+                      </Button>
+                    </Stack>
+                  ) : null}
                 </Stack>
               </button>
             );

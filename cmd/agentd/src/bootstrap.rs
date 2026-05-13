@@ -5,7 +5,10 @@ mod execution_ops;
 mod mcp_ops;
 mod session_ops;
 
-pub use agent_ops::{AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView};
+pub use agent_ops::{
+    AgentProfileUpdatePatch, AgentScheduleCreateOptions, AgentScheduleUpdatePatch,
+    AgentScheduleView,
+};
 pub use delivery_ops::{
     DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
     SessionOutputRouteView, TaskFollowerView,

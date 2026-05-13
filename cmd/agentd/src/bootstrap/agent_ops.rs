@@ -43,6 +43,13 @@ pub struct AgentScheduleView {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileUpdatePatch {
+    pub name: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub default_workspace_root: Option<Option<PathBuf>>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentScheduleUpdatePatch {
     pub agent_identifier: Option<String>,
@@ -260,6 +267,106 @@ impl App {
             &AgentProfileRecord::try_from(&profile).map_err(BootstrapError::RecordConversion)?,
         )?;
         Ok(profile)
+    }
+
+    pub fn update_agent_profile(
+        &self,
+        identifier: &str,
+        patch: AgentProfileUpdatePatch,
+    ) -> Result<AgentProfile, BootstrapError> {
+        let store = self.store()?;
+        let existing = load_agent_profile(&store, identifier)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "agent",
+                id: identifier.to_string(),
+            }
+        })?;
+        let name = patch.name.unwrap_or_else(|| existing.name.clone());
+        let allowed_tools = patch
+            .allowed_tools
+            .unwrap_or_else(|| existing.allowed_tools.clone());
+        let default_workspace_root = match patch.default_workspace_root {
+            Some(Some(path)) => {
+                agent_persistence::validate_workspace_root_path(
+                    "agent.default_workspace_root",
+                    &path,
+                    &self.config.data_dir,
+                )
+                .map_err(BootstrapError::Config)?;
+                Some(path)
+            }
+            Some(None) => None,
+            None => existing.default_workspace_root.clone(),
+        };
+        let updated = AgentProfile::new_with_provenance(
+            existing.id,
+            name,
+            existing.template_kind,
+            existing.agent_home,
+            allowed_tools,
+            default_workspace_root,
+            existing.created_from_template_id,
+            existing.created_by_session_id,
+            existing.created_by_agent_profile_id,
+            existing.created_at,
+            unix_timestamp()?,
+        )
+        .map_err(|error| BootstrapError::Usage {
+            reason: error.to_string(),
+        })?;
+        store.put_agent_profile(
+            &AgentProfileRecord::try_from(&updated).map_err(BootstrapError::RecordConversion)?,
+        )?;
+        Ok(updated)
+    }
+
+    pub fn delete_agent_profile(&self, identifier: &str) -> Result<bool, BootstrapError> {
+        let store = self.store()?;
+        let profile = load_agent_profile(&store, identifier)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "agent",
+                id: identifier.to_string(),
+            }
+        })?;
+        if agents::builtin_template(&profile.id).is_some() {
+            return Err(BootstrapError::Usage {
+                reason: format!("built-in agent {} cannot be deleted", profile.id),
+            });
+        }
+        if store
+            .get_current_agent_profile_id()?
+            .as_deref()
+            .is_some_and(|current| current == profile.id)
+        {
+            return Err(BootstrapError::Usage {
+                reason: format!("current agent {} cannot be deleted", profile.id),
+            });
+        }
+        if store
+            .list_sessions()?
+            .iter()
+            .any(|session| session.agent_profile_id == profile.id)
+        {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "agent {} has linked sessions and cannot be deleted",
+                    profile.id
+                ),
+            });
+        }
+        if store
+            .list_agent_schedules()?
+            .iter()
+            .any(|schedule| schedule.agent_profile_id == profile.id)
+        {
+            return Err(BootstrapError::Usage {
+                reason: format!(
+                    "agent {} has linked schedules and cannot be deleted",
+                    profile.id
+                ),
+            });
+        }
+        store.delete_agent_profile(&profile.id).map_err(Into::into)
     }
 
     pub fn agent_home_path(&self, identifier: &str) -> Result<PathBuf, BootstrapError> {
