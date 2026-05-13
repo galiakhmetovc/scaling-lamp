@@ -349,10 +349,6 @@ async fn telegram_webhook_consumer_loop(
         .map_err(|error| error.to_string())?;
 
     while !shutdown.load(Ordering::Relaxed) {
-        if let Err(error) = worker.deliver_pending_session_notifications().await {
-            log_event_runtime_error(&app, "telegram.delivery.error", &error.to_string());
-        }
-
         let next = tokio::time::timeout(CONSUMER_IDLE_TIMEOUT, messages.next()).await;
         let Some(message) = next.ok().flatten() else {
             continue;
