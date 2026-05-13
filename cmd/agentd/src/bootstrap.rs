@@ -4,6 +4,7 @@ mod delivery_ops;
 mod execution_ops;
 mod mcp_ops;
 mod session_ops;
+mod tool_ops;
 
 pub use agent_ops::{
     AgentProfileUpdatePatch, AgentScheduleCreateOptions, AgentScheduleUpdatePatch,
@@ -15,6 +16,7 @@ pub use delivery_ops::{
 };
 pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};
+pub use tool_ops::{ToolCatalogItemView, ToolCatalogView};
 
 use crate::diagnostics::DiagnosticEventBuilder;
 use crate::store_retry::{

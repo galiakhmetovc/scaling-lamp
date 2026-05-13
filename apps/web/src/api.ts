@@ -6,6 +6,7 @@ import type {
   AgentUpdatePatch,
   ArtifactFile,
   ArtifactFileSummary,
+  McpConnector,
   PendingApproval,
   SessionDebug,
   SessionPreferencesPatch,
@@ -13,6 +14,7 @@ import type {
   SessionSummary,
   SessionTask,
   SessionTranscript,
+  ToolCatalog,
   WebSnapshot,
   WorkerOutcome,
   WorkspaceFile,
@@ -58,6 +60,30 @@ function queryString(params: Record<string, string | number | boolean | null | u
 export const api = {
   snapshot(signal?: AbortSignal) {
     return requestJson<WebSnapshot>(endpoint("/v1/web/snapshot"), { signal });
+  },
+  toolCatalog(signal?: AbortSignal) {
+    return requestJson<ToolCatalog>(endpoint("/v1/tools/catalog"), { signal });
+  },
+  mcpConnectors(signal?: AbortSignal) {
+    return requestJson<McpConnector[]>(endpoint("/v1/mcp/connectors"), { signal });
+  },
+  updateMcpConnector(
+    connectorId: string,
+    patch: Partial<Pick<McpConnector, "command" | "args" | "env" | "cwd" | "enabled">>
+  ) {
+    return requestJson<{ connector: McpConnector }>(endpoint(`/v1/mcp/connectors/${encodeURIComponent(connectorId)}`), {
+      method: "PATCH",
+      body: JSON.stringify({ patch })
+    });
+  },
+  restartMcpConnector(connectorId: string) {
+    return requestJson<{ connector: McpConnector }>(
+      endpoint(`/v1/mcp/connectors/${encodeURIComponent(connectorId)}/restart`),
+      {
+        method: "POST",
+        body: JSON.stringify({})
+      }
+    );
   },
   sessions(limit?: number, offset?: number, signal?: AbortSignal) {
     const params = new URLSearchParams();

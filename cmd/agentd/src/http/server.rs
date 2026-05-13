@@ -5,6 +5,7 @@ mod mcp;
 mod sessions;
 mod status;
 mod telegram;
+mod tools;
 mod web;
 
 use crate::bootstrap::{App, BootstrapError};
@@ -117,6 +118,7 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/mcp/connectors") => {
             mcp::handle_create_mcp_connector(app, request)
         }
+        (&tiny_http::Method::Get, "/v1/tools/catalog") => tools::handle_tool_catalog(app, request),
         (&tiny_http::Method::Post, "/v1/memory/session-search") => {
             sessions::handle_memory_session_search(app, request)
         }

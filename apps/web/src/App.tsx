@@ -14,7 +14,7 @@ import { TasksPane } from "./features/sessions/TasksPane";
 import { buildSessionEvents, type SessionPane } from "./features/sessions/sessionEvents";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { SkillsScreen } from "./features/skills/SkillsScreen";
-import { ToolsTable } from "./features/tools/ToolsTable";
+import { ToolsScreen } from "./features/tools/ToolsScreen";
 import { TracesTable } from "./features/traces/TracesTable";
 import { JsonBlock, SectionHeader } from "./components/common";
 import type {
@@ -525,10 +525,12 @@ export function App() {
         );
       case "tools":
         return (
-          <>
-            <SectionHeader title="Tool calls" subtitle="Последние вызовы инструментов из /v1/web/snapshot." />
-            <ToolsTable tools={snapshot?.recent_tool_calls ?? []} filter={toolFilter} onFilterChange={setToolFilter} />
-          </>
+          <ToolsScreen
+            selectedSession={selectedSession}
+            recentTools={snapshot?.recent_tool_calls ?? []}
+            filter={toolFilter}
+            onFilterChange={setToolFilter}
+          />
         );
       case "routes":
         return (

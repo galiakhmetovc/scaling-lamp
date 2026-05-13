@@ -139,6 +139,50 @@ export type ToolCallSummary = {
   updated_at: number;
 };
 
+export type ToolCatalogItem = {
+  id: string;
+  family: string;
+  origin: string;
+  connector_id?: string | null;
+  remote_name?: string | null;
+  title?: string | null;
+  description: string;
+  read_only: boolean;
+  destructive: boolean;
+  requires_approval: boolean;
+  automatic: boolean;
+  available: boolean;
+  availability_note?: string | null;
+  input_schema: unknown;
+};
+
+export type ToolCatalog = {
+  generated_at: number;
+  tools: ToolCatalogItem[];
+};
+
+export type McpConnectorRuntime = {
+  state: string;
+  pid?: number | null;
+  started_at?: number | null;
+  stopped_at?: number | null;
+  last_error?: string | null;
+  restart_count: number;
+};
+
+export type McpConnector = {
+  id: string;
+  transport: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+  runtime: McpConnectorRuntime;
+};
+
 export type DeliveryTarget = {
   target_id: string;
   kind: string;

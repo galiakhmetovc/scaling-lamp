@@ -2,7 +2,10 @@ use super::support::*;
 use agent_persistence::McpConnectorSeedConfig;
 use agent_runtime::mcp::McpConnectorTransport;
 use agentd::bootstrap::{McpConnectorCreateOptions, McpConnectorUpdatePatch, build_from_config};
-use agentd::mcp::{McpConnectorState, McpWorkerControl, SharedMcpRegistry};
+use agentd::mcp::{
+    McpConnectorState, McpDiscoveredTool, McpWorkerControl, MockMcpConnectorRuntime,
+    SharedMcpRegistry,
+};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -260,4 +263,58 @@ fn restart_mcp_connector_starts_enabled_connector_and_leaves_disabled_stopped() 
     assert_eq!(enabled.runtime.state, McpConnectorState::Running);
     assert_eq!(enabled.runtime.pid, Some(31337));
     assert_eq!(disabled.runtime.state, McpConnectorState::Stopped);
+}
+
+#[test]
+fn tool_catalog_includes_builtin_and_discovered_mcp_tools() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    app.mcp = SharedMcpRegistry::with_mock_connectors(vec![MockMcpConnectorRuntime {
+        id: "docs".to_string(),
+        tools: vec![McpDiscoveredTool {
+            exposed_name: "mcp__docs__search_code".to_string(),
+            remote_name: "search_code".to_string(),
+            title: Some("Search code".to_string()),
+            description: Some("Search code through MCP".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            read_only: true,
+            destructive: false,
+        }],
+        resources: Vec::new(),
+        prompts: Vec::new(),
+        tool_results: BTreeMap::new(),
+        resource_reads: BTreeMap::new(),
+        prompt_gets: BTreeMap::new(),
+    }]);
+
+    let catalog = app.tool_catalog().expect("tool catalog");
+    let fs_read = catalog
+        .tools
+        .iter()
+        .find(|tool| tool.id == "fs_read_text")
+        .expect("fs_read_text");
+    let mcp_search = catalog
+        .tools
+        .iter()
+        .find(|tool| tool.id == "mcp__docs__search_code")
+        .expect("mcp search tool");
+
+    assert_eq!(fs_read.origin, "built_in");
+    assert_eq!(fs_read.family, "fs");
+    assert!(fs_read.read_only);
+    assert!(fs_read.automatic);
+    assert_eq!(mcp_search.origin, "mcp");
+    assert_eq!(mcp_search.family, "mcp");
+    assert_eq!(mcp_search.connector_id.as_deref(), Some("docs"));
+    assert_eq!(mcp_search.remote_name.as_deref(), Some("search_code"));
+    assert!(mcp_search.available);
 }
