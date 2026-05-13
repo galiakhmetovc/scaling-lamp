@@ -23,6 +23,7 @@ mod provider_offload;
 mod provider_prompt;
 mod provider_text;
 mod provider_tool_dispatch;
+mod provider_tool_errors;
 mod scopes;
 mod skill_install;
 mod supervisor;

@@ -126,28 +126,8 @@ fn normalized_mcp_pagination(
 }
 
 impl ExecutionService {
-    fn provider_tool_output(
-        tool_name: &str,
-        reason: &str,
-        retryable: bool,
-        details: serde_json::Value,
-    ) -> String {
-        serde_json::json!({
-            "tool": tool_name,
-            "error": reason,
-            "retryable": retryable,
-            "details": details,
-        })
-        .to_string()
-    }
-
     fn invalid_provider_tool_output(tool_name: &str, reason: &str) -> String {
-        serde_json::json!({
-            "tool": tool_name,
-            "error": format!("invalid tool call: {reason}"),
-            "retryable": true,
-        })
-        .to_string()
+        super::provider_tool_errors::invalid_provider_tool_output(tool_name, reason)
     }
 
     fn file_delivery_request_id(run_id: &str, artifact_id: &str, now: i64) -> String {
@@ -216,20 +196,12 @@ impl ExecutionService {
             .unwrap_or_else(|| "workspace-file.bin".to_string())
     }
 
-    fn retryable_provider_tool_output(
-        tool_name: &str,
-        reason: &str,
-        details: serde_json::Value,
-    ) -> String {
-        Self::provider_tool_output(tool_name, reason, true, details)
-    }
-
     fn non_retryable_provider_tool_output(
         tool_name: &str,
         reason: &str,
         details: serde_json::Value,
     ) -> String {
-        Self::provider_tool_output(tool_name, reason, false, details)
+        super::provider_tool_errors::non_retryable_provider_tool_output(tool_name, reason, details)
     }
 
     fn recoverable_tool_error_output(
@@ -237,115 +209,12 @@ impl ExecutionService {
         parsed: &ToolCall,
         error: &ToolError,
     ) -> Option<String> {
-        match error {
-            ToolError::UnknownProcess { process_id } => Some(Self::retryable_provider_tool_output(
-                parsed.name().as_str(),
-                &format!("unknown process {process_id}"),
-                serde_json::json!({
-                    "requested_process_id": process_id,
-                    "active_process_ids": self.processes.active_process_ids(Some(agent_runtime::tool::ProcessKind::Exec)),
-                }),
-            )),
-            ToolError::ProcessFamilyMismatch {
-                process_id,
-                expected,
-                actual,
-            } => Some(Self::retryable_provider_tool_output(
-                parsed.name().as_str(),
-                &format!(
-                    "process {process_id} has family mismatch: expected {} but found {}",
-                    expected.as_prefix(),
-                    actual.as_prefix()
-                ),
-                serde_json::json!({
-                    "requested_process_id": process_id,
-                    "expected_kind": expected.as_prefix(),
-                    "actual_kind": actual.as_prefix(),
-                    "active_process_ids": self.processes.active_process_ids(None),
-                }),
-            )),
-            ToolError::ProcessIo { process_id, source } => {
-                Some(Self::retryable_provider_tool_output(
-                    parsed.name().as_str(),
-                    &format!("process io error for {process_id}: {source}"),
-                    serde_json::json!({
-                        "process_or_executable": process_id,
-                        "active_process_ids": self.processes.active_process_ids(None),
-                    }),
-                ))
-            }
-            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::InvalidPath {
-                path,
-                reason,
-            }) => Some(Self::retryable_provider_tool_output(
-                parsed.name().as_str(),
-                &format!("invalid workspace path {path}: {reason}"),
-                serde_json::json!({
-                    "requested_path": path,
-                    "constraint": "workspace_relative_only",
-                    "workspace_root": self.workspace.root.display().to_string(),
-                }),
-            )),
-            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io { path, source })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                Some(Self::retryable_provider_tool_output(
-                    parsed.name().as_str(),
-                    &format!("workspace path not found: {}", path.display()),
-                    serde_json::json!({
-                        "requested_path": path.display().to_string(),
-                        "hint": "check the exact relative path and list nearby files before retrying",
-                    }),
-                ))
-            }
-            ToolError::Workspace(agent_runtime::workspace::WorkspaceError::Io { path, source })
-                if matches!(
-                    source.kind(),
-                    std::io::ErrorKind::IsADirectory | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Some(Self::retryable_provider_tool_output(
-                    parsed.name().as_str(),
-                    &format!("workspace path is not a regular file: {}", path.display()),
-                    serde_json::json!({
-                        "requested_path": path.display().to_string(),
-                        "io_error": source.to_string(),
-                        "hint": "re-check whether the path should target a file or use a list/read-directory style tool instead",
-                    }),
-                ))
-            }
-            ToolError::InvalidPatch { path, reason } => Some(Self::retryable_provider_tool_output(
-                parsed.name().as_str(),
-                &format!("invalid patch for {path}: {reason}"),
-                serde_json::json!({
-                    "requested_path": path,
-                    "patch_error": reason,
-                    "hint": "re-read the file and construct the patch from the current content",
-                }),
-            )),
-            ToolError::InvalidPlanWrite { reason }
-                if Self::is_retryable_plan_write_reason(reason) =>
-            {
-                Some(Self::retryable_provider_tool_output(
-                    parsed.name().as_str(),
-                    &format!("invalid plan reference: {reason}"),
-                    serde_json::json!({
-                            "plan_error": reason,
-                        "hint": "use canonical task_id values returned by add_task or plan_snapshot",
-                    }),
-                ))
-            }
-            _ => Some(Self::non_retryable_provider_tool_output(
-                parsed.name().as_str(),
-                &error.to_string(),
-                serde_json::json!({
-                    "requested_tool": parsed.name().as_str(),
-                    "request_summary": parsed.summary(),
-                    "error_kind": format!("{error:?}"),
-                    "hint": "inspect the error details and adjust the tool arguments or choose a different tool before retrying",
-                }),
-            )),
-        }
+        super::provider_tool_errors::recoverable_tool_error_output(
+            &self.processes,
+            &self.workspace,
+            parsed,
+            error,
+        )
     }
 
     fn recoverable_execution_error_output(
@@ -353,30 +222,12 @@ impl ExecutionService {
         parsed: &ToolCall,
         error: &ExecutionError,
     ) -> Option<String> {
-        match error {
-            ExecutionError::Tool(tool_error) => {
-                self.recoverable_tool_error_output(parsed, tool_error)
-            }
-            ExecutionError::PermissionDenied { tool, reason } => Some(
-                serde_json::json!({
-                    "tool": tool,
-                    "error": reason,
-                    "retryable": false,
-                    "details": {
-                        "requested_tool": tool,
-                        "constraint": "agent_allowed_tools",
-                    },
-                })
-                .to_string(),
-            ),
-            _ => None,
-        }
-    }
-
-    fn is_retryable_plan_write_reason(reason: &str) -> bool {
-        reason.starts_with("unknown dependency ")
-            || reason.starts_with("unknown task ")
-            || reason.starts_with("unknown parent task ")
+        super::provider_tool_errors::recoverable_execution_error_output(
+            &self.processes,
+            &self.workspace,
+            parsed,
+            error,
+        )
     }
 
     fn automatic_provider_tools(
