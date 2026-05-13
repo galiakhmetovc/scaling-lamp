@@ -170,6 +170,41 @@ pub(super) fn render_failed_temporary_status_html(error: &str) -> String {
     .join("\n")
 }
 
+pub(super) fn render_completed_temporary_status_html(
+    state: &TelegramProgressState,
+    detail_char_cap: usize,
+) -> String {
+    let mut lines = vec![
+        "<b>✅ Готово</b>".to_string(),
+        "Стадия: завершено".to_string(),
+        format!(
+            "Вызовы: {} · Ошибки: {}",
+            state.total_tool_calls, state.failed_tool_calls
+        ),
+    ];
+
+    if let Some((current_round, max_rounds)) = state.current_round {
+        lines.push(format!("Раунд: {current_round}/{max_rounds}"));
+    }
+    if let Some(tool_name) = state.current_tool_name.as_deref() {
+        lines.push(format!(
+            "Последний инструмент: <code>{}</code>",
+            escape_telegram_html(tool_name)
+        ));
+    }
+    if let Some(status) = state.current_tool_status.as_ref() {
+        lines.push(format!("Статус: {}", render_tool_status_label(status)));
+    }
+    if let Some(summary) = state.current_tool_summary.as_deref() {
+        lines.push(format!(
+            "Деталь: {}",
+            render_status_detail(summary, detail_char_cap)
+        ));
+    }
+
+    lines.join("\n")
+}
+
 fn render_tool_phase_title(tool_name: Option<&str>) -> &'static str {
     let Some(tool_name) = tool_name else {
         return "🔧 Работаю с инструментами";
@@ -285,5 +320,29 @@ mod tests {
         let rendered_kv = render_temporary_status_html(tracker.state(), 700);
         assert!(rendered_kv.contains("Работаю с KV"));
         assert!(rendered_kv.contains("Вызовы: 2"));
+    }
+
+    #[test]
+    fn completed_status_rendering_keeps_final_tool_counts() {
+        let mut tracker = TelegramProgressTracker::default();
+        tracker.apply(&ChatExecutionEvent::ToolStatus {
+            tool_call_id: "call-1".to_string(),
+            tool_name: "exec_start".to_string(),
+            summary: "started process".to_string(),
+            status: ToolExecutionStatus::Completed,
+        });
+        tracker.apply(&ChatExecutionEvent::ToolStatus {
+            tool_call_id: "call-2".to_string(),
+            tool_name: "web_fetch".to_string(),
+            summary: "request failed".to_string(),
+            status: ToolExecutionStatus::Failed,
+        });
+
+        let html = render_completed_temporary_status_html(tracker.state(), 200);
+
+        assert!(html.contains("✅ Готово"));
+        assert!(html.contains("Вызовы: 2 · Ошибки: 1"));
+        assert!(html.contains("Последний инструмент: <code>web_fetch</code>"));
+        assert!(html.contains("Статус: ошибка"));
     }
 }

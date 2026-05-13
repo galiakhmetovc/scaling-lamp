@@ -19,7 +19,8 @@ use super::files::{
 };
 use super::polling::next_confirmed_offset;
 use super::progress::{
-    TelegramProgressTracker, render_failed_temporary_status_html, render_file_delivery_failed_html,
+    TelegramProgressTracker, render_completed_temporary_status_html,
+    render_failed_temporary_status_html, render_file_delivery_failed_html,
     render_temporary_status_html,
 };
 use super::queue::{
@@ -64,6 +65,12 @@ const TELEGRAM_CHAT_STATUS_ACTIVE: &str = "active";
 const TELEGRAM_CHAT_STATUS_STALE: &str = "stale";
 
 static TELEGRAM_PAIRING_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+enum TelegramStatusRefresh {
+    Active { session_id: String, html: String },
+    Finished { session_id: String, html: String },
+    Keep,
+}
 
 #[derive(Debug, Clone)]
 pub struct TelegramWorker<B> {
@@ -1820,71 +1827,97 @@ where
     }
 
     pub(crate) async fn refresh_active_chat_statuses(&self) -> Result<(), BootstrapError> {
+        let now = unix_timestamp()?;
         let statuses = self.with_store_retry(|store| store.list_telegram_chat_statuses())?;
         for status in statuses {
             if status.state != TELEGRAM_CHAT_STATUS_ACTIVE {
                 continue;
             }
-            let Some((session_id, html)) =
-                self.render_status_from_session_state(status.telegram_chat_id)?
-            else {
-                continue;
-            };
-            let should_edit = {
-                let mut cache = self
-                    .progress_status_cache
-                    .lock()
-                    .expect("telegram progress status cache");
-                if cache.get(&status.telegram_chat_id) == Some(&html) {
-                    false
-                } else {
-                    cache.insert(status.telegram_chat_id, html.clone());
-                    true
-                }
-            };
-            if should_edit
-                && let Err(error) = self
-                    .edit_html_delivered(status.telegram_chat_id, status.message_id, &html)
-                    .await
+            match self
+                .render_status_from_session_state(status.telegram_chat_id, status.updated_at)?
             {
-                DiagnosticEventBuilder::new(
-                    &self.app.config,
-                    "warn",
-                    "telegram",
-                    "status_edit.skipped",
-                    "telegram progress status edit failed",
-                )
-                .error(error.to_string())
-                .field("chat_id", status.telegram_chat_id)
-                .field("message_id", i64::from(status.message_id))
-                .field("session_id", session_id.as_str())
-                .emit(&self.audit);
+                TelegramStatusRefresh::Active { session_id, html } => {
+                    self.edit_chat_status_if_changed(
+                        status.telegram_chat_id,
+                        status.message_id,
+                        &session_id,
+                        &html,
+                    )
+                    .await;
+                }
+                TelegramStatusRefresh::Finished { session_id, html } => {
+                    self.edit_chat_status_if_changed(
+                        status.telegram_chat_id,
+                        status.message_id,
+                        &session_id,
+                        &html,
+                    )
+                    .await;
+                    self.mark_chat_status_stale(status.telegram_chat_id, status.message_id, now)?;
+                }
+                TelegramStatusRefresh::Keep => {}
             }
         }
         Ok(())
     }
 
+    async fn edit_chat_status_if_changed(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        session_id: &str,
+        html: &str,
+    ) {
+        let should_edit = {
+            let mut cache = self
+                .progress_status_cache
+                .lock()
+                .expect("telegram progress status cache");
+            if cache.get(&chat_id).is_some_and(|cached| cached == html) {
+                false
+            } else {
+                cache.insert(chat_id, html.to_string());
+                true
+            }
+        };
+        if should_edit && let Err(error) = self.edit_html_delivered(chat_id, message_id, html).await
+        {
+            DiagnosticEventBuilder::new(
+                &self.app.config,
+                "warn",
+                "telegram",
+                "status_edit.skipped",
+                "telegram progress status edit failed",
+            )
+            .error(error.to_string())
+            .field("chat_id", chat_id)
+            .field("message_id", i64::from(message_id))
+            .field("session_id", session_id)
+            .emit(&self.audit);
+        }
+    }
+
     fn render_status_from_session_state(
         &self,
         chat_id: i64,
-    ) -> Result<Option<(String, String)>, BootstrapError> {
+        status_started_at: i64,
+    ) -> Result<TelegramStatusRefresh, BootstrapError> {
         let Some(binding) =
             self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
         else {
-            return Ok(None);
+            return Ok(TelegramStatusRefresh::Keep);
         };
         let Some(session_id) = binding.selected_session_id else {
-            return Ok(None);
+            return Ok(TelegramStatusRefresh::Keep);
         };
         let runs =
             self.with_store_retry(|store| store.list_recent_runs_for_session(&session_id, 1))?;
         let Some(run) = runs.last() else {
-            return Ok(None);
+            return Ok(TelegramStatusRefresh::Keep);
         };
-        if run.finished_at.is_some() {
-            return Ok(None);
+        if run.started_at < status_started_at {
+            return Ok(TelegramStatusRefresh::Keep);
         }
-
         let mut progress = TelegramProgressTracker::default();
         progress.apply(&ChatExecutionEvent::ProviderLoopProgress {
             current_round: 1,
@@ -1903,13 +1936,22 @@ where
                 status,
             });
         }
-        Ok(Some((
-            session_id,
+        let html = if run.finished_at.is_some() {
+            render_completed_temporary_status_html(
+                progress.state(),
+                self.app.config.telegram.status_detail_char_cap,
+            )
+        } else {
             render_temporary_status_html(
                 progress.state(),
                 self.app.config.telegram.status_detail_char_cap,
-            ),
-        )))
+            )
+        };
+        if run.finished_at.is_some() {
+            Ok(TelegramStatusRefresh::Finished { session_id, html })
+        } else {
+            Ok(TelegramStatusRefresh::Active { session_id, html })
+        }
     }
 
     async fn fail_temporary_status_message(
