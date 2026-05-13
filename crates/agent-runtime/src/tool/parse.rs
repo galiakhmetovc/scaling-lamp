@@ -29,6 +29,16 @@ pub enum ToolCallParseError {
 }
 
 impl ToolCall {
+    fn custom_invalid_arguments_error(name: &str, reason: String) -> ToolCallParseError {
+        ToolCallParseError::InvalidArguments {
+            name: name.to_string(),
+            source: serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                reason,
+            )),
+        }
+    }
+
     fn invalid_arguments_error(name: &str, source: serde_json::Error) -> ToolCallParseError {
         ToolCallParseError::InvalidArguments {
             name: name.to_string(),
@@ -52,6 +62,50 @@ impl ToolCall {
                 Err(Self::invalid_arguments_error(name, source))
             }
         }
+    }
+
+    fn reject_unknown_argument_keys(
+        name: &str,
+        tool_name: ToolName,
+        arguments: &Value,
+    ) -> Result<(), ToolCallParseError> {
+        let Some(arguments) = arguments.as_object() else {
+            return Ok(());
+        };
+        let schema = tool_name.input_schema();
+        if schema.get("additionalProperties").and_then(Value::as_bool) != Some(false) {
+            return Ok(());
+        }
+        let allowed = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                Self::custom_invalid_arguments_error(
+                    name,
+                    format!(
+                        "tool {} has no declared argument properties",
+                        tool_name.as_str()
+                    ),
+                )
+            })?;
+        let unknown = arguments
+            .keys()
+            .filter(|key| !allowed.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unknown.is_empty() {
+            return Ok(());
+        }
+        let mut allowed_names = allowed.keys().cloned().collect::<Vec<_>>();
+        allowed_names.sort();
+        Err(Self::custom_invalid_arguments_error(
+            name,
+            format!(
+                "unknown argument field(s): {}; allowed fields: {}",
+                unknown.join(", "),
+                allowed_names.join(", ")
+            ),
+        ))
     }
 
     fn parse_arguments_with_bare_string_repair<T: DeserializeOwned>(
@@ -649,6 +703,12 @@ impl ToolCall {
     }
 
     pub fn from_openai_function(name: &str, arguments: &str) -> Result<Self, ToolCallParseError> {
+        if let Some(tool_name) = ToolName::from_openai_function_name(name)
+            && let Ok(arguments_value) = serde_json::from_str::<Value>(arguments)
+        {
+            Self::reject_unknown_argument_keys(name, tool_name, &arguments_value)?;
+        }
+
         match name {
             "fs_read" => serde_json::from_str(arguments)
                 .map(Self::FsRead)

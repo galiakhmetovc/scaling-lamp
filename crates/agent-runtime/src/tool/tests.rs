@@ -448,6 +448,69 @@ fn automatic_model_definitions_include_file_delivery_tool() {
 }
 
 #[test]
+fn automatic_model_tool_contracts_are_strict_documented_and_parse_examples() {
+    let catalog = ToolCatalog::default();
+
+    for definition in catalog.automatic_model_definitions() {
+        assert!(
+            !definition.description.trim().is_empty(),
+            "{} must have a model-facing description",
+            definition.name.as_str()
+        );
+
+        let schema = definition.name.input_schema();
+        assert_eq!(
+            schema.get("type").and_then(serde_json::Value::as_str),
+            Some("object"),
+            "{} must expose an object argument schema",
+            definition.name.as_str()
+        );
+        assert_eq!(
+            schema
+                .get("additionalProperties")
+                .and_then(serde_json::Value::as_bool),
+            Some(false),
+            "{} must reject undeclared top-level arguments",
+            definition.name.as_str()
+        );
+        assert!(
+            schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .is_some(),
+            "{} must document its argument fields",
+            definition.name.as_str()
+        );
+
+        let example = definition
+            .name
+            .example_arguments_json()
+            .unwrap_or_else(|| panic!("{} must have a success example", definition.name.as_str()));
+        let parsed = ToolCall::from_openai_function(definition.name.as_str(), example)
+            .unwrap_or_else(|error| {
+                panic!("{} example must parse: {error}", definition.name.as_str())
+            });
+        assert_eq!(
+            parsed.name(),
+            definition.name,
+            "{} example must parse into the same tool",
+            definition.name.as_str()
+        );
+
+        let error = ToolCall::from_openai_function(
+            definition.name.as_str(),
+            r#"{"__unexpected_contract_field":true}"#,
+        )
+        .expect_err("unknown top-level argument must fail");
+        assert!(
+            error.to_string().contains("unknown argument field"),
+            "{} unknown-field error should explain the contract violation: {error}",
+            definition.name.as_str()
+        );
+    }
+}
+
+#[test]
 fn deliver_file_model_output_hides_internal_artifact_id() {
     let output = super::ToolOutput::DeliverFile(super::DeliverFileOutput {
         request_id: "delivery-1".to_string(),

@@ -12,6 +12,129 @@ impl ToolDefinition {
     }
 }
 impl ToolName {
+    pub fn example_arguments_json(self) -> Option<&'static str> {
+        Some(match self {
+            Self::FsReadText => r#"{"path":"README.md"}"#,
+            Self::FsReadLines => r#"{"path":"README.md","start_line":1,"end_line":5}"#,
+            Self::FsSearchText => r#"{"path":"README.md","query":"teamD"}"#,
+            Self::FsFindInFiles => r#"{"query":"teamD","glob":"*.md","limit":5}"#,
+            Self::FsWriteText => {
+                r#"{"path":"notes/example.md","content":"hello\n","mode":"create"}"#
+            }
+            Self::FsPatchText => {
+                r#"{"path":"notes/example.md","search":"old text","replace":"new text"}"#
+            }
+            Self::FsReplaceLines => {
+                r#"{"path":"notes/example.md","start_line":1,"end_line":1,"content":"new line\n"}"#
+            }
+            Self::FsInsertText => {
+                r#"{"path":"notes/example.md","position":"append","content":"tail\n"}"#
+            }
+            Self::FsMkdir => r#"{"path":"notes"}"#,
+            Self::FsMove => r#"{"src":"notes/old.md","dest":"notes/new.md"}"#,
+            Self::FsTrash => r#"{"path":"notes/old.md"}"#,
+            Self::FsList => r#"{"path":".","recursive":false,"limit":20}"#,
+            Self::FsGlob => r#"{"path":".","pattern":"*.md","limit":20}"#,
+            Self::WebFetch => r#"{"url":"https://example.com"}"#,
+            Self::WebSearch => r#"{"query":"teamD agent runtime","limit":3}"#,
+            Self::BrowserOpen => r#"{"url":"https://example.com","wait_until":"load"}"#,
+            Self::BrowserSnapshot => r#"{"interactive":true,"compact":true,"max_chars":12000}"#,
+            Self::BrowserText => r#"{"selector":"body","max_chars":12000}"#,
+            Self::BrowserClick => r#"{"selector":"@e1","wait_until":"networkidle"}"#,
+            Self::BrowserFill => r#"{"selector":"input[name=q]","text":"teamD"}"#,
+            Self::BrowserPress => r#"{"key":"Enter"}"#,
+            Self::BrowserWait => r#"{"kind":"selector","value":"main","state":"visible"}"#,
+            Self::BrowserScroll => r#"{"direction":"down","pixels":800}"#,
+            Self::BrowserEval => r#"{"script":"document.title","max_chars":4000}"#,
+            Self::BrowserScreenshot => {
+                r#"{"path":"scratch/browser/page.png","full":true,"annotate":false}"#
+            }
+            Self::BrowserPdf => r#"{"path":"scratch/browser/page.pdf"}"#,
+            Self::BrowserStatus => r#"{}"#,
+            Self::BrowserClose => r#"{"all":false}"#,
+            Self::ExecStart => r#"{"executable":"echo","args":["hello"],"cwd":"."}"#,
+            Self::ExecReadOutput => r#"{"process_id":"exec-1","stream":"merged","max_lines":20}"#,
+            Self::ExecWait => r#"{"process_id":"exec-1","timeout_ms":60000}"#,
+            Self::ExecKill => r#"{"process_id":"exec-1"}"#,
+            Self::InitPlan => r#"{"goal":"Ship the requested change"}"#,
+            Self::AddTask => r#"{"description":"Implement the runtime change","depends_on":[]}"#,
+            Self::SetTaskStatus => r#"{"task_id":"task-1","new_status":"in_progress"}"#,
+            Self::AddTaskNote => r#"{"task_id":"task-1","note":"Found the parser seam"}"#,
+            Self::EditTask => r#"{"task_id":"task-1","description":"Updated task text"}"#,
+            Self::PlanSnapshot => r#"{}"#,
+            Self::PlanLint => r#"{}"#,
+            Self::PromptBudgetRead => r#"{}"#,
+            Self::PromptBudgetUpdate => {
+                r#"{"scope":"next_turn","reset":true,"reason":"clear temporary override"}"#
+            }
+            Self::AutonomyStateRead => r#"{"max_items":5,"include_inactive_schedules":false}"#,
+            Self::SkillList => r#"{"include_inactive":true,"limit":20}"#,
+            Self::SkillRead => r#"{"name":"silverbullet","max_bytes":8000}"#,
+            Self::SkillEnable => r#"{"name":"silverbullet"}"#,
+            Self::SkillDisable => r#"{"name":"silverbullet"}"#,
+            Self::SkillInstall => {
+                r#"{"source_dir":"skills/mail-workflow","name":"mail-workflow","enable":true}"#
+            }
+            Self::ArtifactRead => r#"{"artifact_id":"artifact-1","max_bytes":8000}"#,
+            Self::ArtifactSearch => r#"{"query":"report","limit":5}"#,
+            Self::ArtifactPin => r#"{"artifact_id":"artifact-1"}"#,
+            Self::ArtifactUnpin => r#"{"artifact_id":"artifact-1"}"#,
+            Self::DeliverFile => r#"{"workspace_path":"reports/result.pdf","caption":"Done"}"#,
+            Self::MemoryAdd => {
+                r#"{"text":"User prefers concise answers.","scope":"operator","infer":false}"#
+            }
+            Self::MemorySearch => {
+                r#"{"query":"preferred response style","scope":"operator","limit":5}"#
+            }
+            Self::MemoryList => r#"{"scope":"workspace","limit":10}"#,
+            Self::MemoryUpdate => {
+                r#"{"memory_id":"mem-1","text":"User prefers concise direct answers."}"#
+            }
+            Self::MemoryDelete => r#"{"memory_id":"mem-1"}"#,
+            Self::KvGet => r#"{"key":"state/current_task","scope":"agent_shared"}"#,
+            Self::KvPut => {
+                r#"{"key":"state/current_task","value":{"id":"task-1"},"scope":"agent_shared"}"#
+            }
+            Self::KvList => r#"{"scope":"agent_shared","prefix":"state/","limit":10}"#,
+            Self::KvDelete => r#"{"key":"state/current_task","scope":"agent_shared"}"#,
+            Self::KnowledgeSearch => r#"{"query":"prompt contract","limit":5,"roots":["docs"]}"#,
+            Self::KnowledgeRead => {
+                r#"{"path":"docs/current/00-overview.md","mode":"excerpt","max_lines":20}"#
+            }
+            Self::SessionSearch => r#"{"query":"telegram routing","limit":5}"#,
+            Self::SessionRead => r#"{"session_id":"session-1","mode":"transcript","max_items":10}"#,
+            Self::SessionWait => {
+                r#"{"session_id":"session-agentmsg-1","wait_timeout_ms":1000,"mode":"transcript","max_items":10}"#
+            }
+            Self::McpSearchResources => r#"{"query":"project","limit":5}"#,
+            Self::McpReadResource => r#"{"connector_id":"silverbullet","uri":"sb://README.md"}"#,
+            Self::McpSearchPrompts => r#"{"query":"summary","limit":5}"#,
+            Self::McpGetPrompt => {
+                r#"{"connector_id":"silverbullet","name":"summarize","arguments":{"topic":"teamD"}}"#
+            }
+            Self::AgentList => r#"{"limit":10}"#,
+            Self::AgentRead => r#"{"identifier":"default"}"#,
+            Self::AgentCreate => r#"{"name":"Monitoring Agent","template_identifier":"default"}"#,
+            Self::ContinueLater => {
+                r#"{"delay_seconds":120,"handoff_payload":"Send the reminder now.","delivery_mode":"existing_session"}"#
+            }
+            Self::ScheduleList => r#"{"limit":10}"#,
+            Self::ScheduleRead => r#"{"id":"daily-status"}"#,
+            Self::ScheduleCreate => {
+                r#"{"id":"daily-status","prompt":"Send daily status.","mode":"interval","delivery_mode":"fresh_session","interval_seconds":86400}"#
+            }
+            Self::ScheduleUpdate => r#"{"id":"daily-status","enabled":false}"#,
+            Self::ScheduleDelete => r#"{"id":"daily-status"}"#,
+            Self::MessageAgent => {
+                r#"{"target_agent_id":"judge","message":"Review the current plan and return risks."}"#
+            }
+            Self::GrantAgentChainContinuation => {
+                r#"{"chain_id":"chain-session-1-1","reason":"Need one final review response."}"#
+            }
+            _ => return None,
+        })
+    }
+
     pub fn input_schema(self) -> Value {
         match self {
             Self::FsRead => json!({

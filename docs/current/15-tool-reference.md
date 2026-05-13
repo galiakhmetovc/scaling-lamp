@@ -71,6 +71,20 @@ Tools не попадают в prompt как большой текстовый R
 - `plan_read` и `plan_write` определены, но для обычного model-driven loop вместо них используются более узкие typed planning tools.
 - Legacy add-ons не входят в production surface. Для заметок используйте SilverBullet/SilverBullet MCP, для браузера — built-in `browser_*` через `agent-browser`/Browserless.
 
+## Контракт schema, parser и debug ledger
+
+Для каждого model-facing tool теперь действует один контракт:
+
+- `ToolCatalog::automatic_model_definitions()` решает, какие built-in tools вообще можно показать модели.
+- `ToolName::input_schema()` описывает provider-facing JSON schema.
+- `ToolName::example_arguments_json()` содержит минимальный success-пример, который обязан реально парситься runtime.
+- `ToolCall::from_openai_function(...)` сначала проверяет top-level поля по schema и отказывает неизвестным полям, если schema содержит `additionalProperties: false`.
+- Фактический вызов всегда записывается в tool-call ledger: `tool`, `arguments`, `status`, `error`, `result_summary`, `result_preview`, `result_artifact_id`.
+
+Это важно: если модель прислала `old/new` вместо `search/replace`, `source` вместо `workspace_path`, `session` вместо `session_id` или любое другое неописанное top-level поле, runtime должен вернуть parse error сразу. Нельзя молча игнорировать лишние поля: иначе модель “думает”, что tool принят, а ошибка проявляется позже и хуже отлаживается.
+
+Регрессионный тест контракта находится в [`crates/agent-runtime/src/tool/tests.rs`](../../crates/agent-runtime/src/tool/tests.rs): `automatic_model_tool_contracts_are_strict_documented_and_parse_examples`.
+
 ## Канонический model-facing tool surface
 
 Ниже перечислены именно те ids, которые входят в `automatic_model_definitions()`.
