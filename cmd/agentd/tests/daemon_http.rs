@@ -15,49 +15,24 @@ use agent_runtime::tool::{
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    A2ACallbackTargetRequest, A2ADelegationAcceptedResponse, A2ADelegationCompletionOutcomeRequest,
-    A2ADelegationCompletionRequest, A2ADelegationCreateRequest, AgentFileReadResponse,
-    AgentFileWriteResponse, AgentFilesResponse, CreateSessionRequest, DaemonStopResponse,
-    DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse, McpConnectorCreateRequest,
-    McpConnectorDetailResponse, McpConnectorUpdateRequest, MemoryRenderResponse,
-    SessionArtifactFileResponse, SessionArtifactFilesResponse, SessionBackgroundJobResponse,
-    SessionDebugResponse, SessionSummaryResponse, SessionWorkspaceFileResponse,
-    SessionWorkspaceListResponse, SkillCommandRequest, StatusResponse, TaskControlResponse,
-    TaskRenderResponse,
+    AgentFileReadResponse, AgentFileWriteResponse, AgentFilesResponse, CreateSessionRequest,
+    DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
+    McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
+    MemoryRenderResponse, SessionArtifactFileResponse, SessionArtifactFilesResponse,
+    SessionBackgroundJobResponse, SessionDebugResponse, SessionSummaryResponse,
+    SessionWorkspaceFileResponse, SessionWorkspaceListResponse, SkillCommandRequest,
+    StatusResponse, TaskControlResponse, TaskRenderResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
+#[path = "daemon_http/support.rs"]
+mod support;
 
-fn test_app(token: Option<&str>) -> (tempfile::TempDir, bootstrap::App, String) {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let mut config = AppConfig {
-        data_dir: temp.path().join("teamd-state"),
-        ..AppConfig::default()
-    };
-    config.daemon.bind_host = "127.0.0.1".to_string();
-    config.daemon.bind_port = free_port();
-    config.daemon.bearer_token = token.map(str::to_string);
-    let base_url = format!(
-        "http://{}:{}",
-        config.daemon.bind_host, config.daemon.bind_port
-    );
-    let app = bootstrap::build_from_config(config).expect("build app");
-    (temp, app, base_url)
-}
+use support::{free_port, spawn_json_server_sequence, test_app};
 
 #[test]
 fn daemon_http_status_is_public_when_no_token_is_configured() {
@@ -1267,130 +1242,6 @@ fn daemon_http_exposes_current_session_background_jobs_and_counts() {
 }
 
 #[test]
-fn daemon_http_a2a_accepts_remote_delegation_and_creates_child_session_and_job() {
-    let (_temp, app, base_url) = test_app(Some("secret-token"));
-    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
-    let client = Client::new();
-
-    let response = client
-        .post(format!("{base_url}/v1/a2a/delegations"))
-        .bearer_auth("secret-token")
-        .json(&A2ADelegationCreateRequest {
-            parent_session_id: "session-parent".to_string(),
-            parent_job_id: "job-parent".to_string(),
-            label: "judge".to_string(),
-            goal: "Review the artifacts and return a verdict.".to_string(),
-            bounded_context: vec!["reports/judge.md".to_string()],
-            write_scope: agent_runtime::delegation::DelegateWriteScope::new(vec![
-                "reports".to_string(),
-            ])
-            .expect("write scope"),
-            expected_output: "Short verdict".to_string(),
-            owner: "a2a:judge".to_string(),
-            callback: A2ACallbackTargetRequest {
-                url: "https://daemon-a.example/v1/a2a/delegations/job-parent/complete".to_string(),
-                bearer_token: Some("callback-token".to_string()),
-            },
-            now: 10,
-        })
-        .send()
-        .expect("create a2a delegation");
-
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let accepted: A2ADelegationAcceptedResponse = response.json().expect("accepted json");
-    assert_eq!(accepted.remote_session_id, "session-a2a-job-parent");
-    assert_eq!(accepted.remote_job_id, "job-a2a-job-parent");
-
-    let store = PersistenceStore::open(&app.persistence).expect("open store");
-    let session = store
-        .get_session("session-a2a-job-parent")
-        .expect("get remote session")
-        .expect("remote session exists");
-    assert_eq!(session.parent_session_id.as_deref(), Some("session-parent"));
-    assert_eq!(session.parent_job_id.as_deref(), Some("job-parent"));
-
-    let job = JobSpec::try_from(
-        store
-            .get_job("job-a2a-job-parent")
-            .expect("get remote job")
-            .expect("remote job exists"),
-    )
-    .expect("restore remote job");
-    assert_eq!(job.status, JobStatus::Running);
-    assert!(job.callback.is_some());
-
-    handle.stop().expect("stop daemon");
-}
-
-#[test]
-fn daemon_http_a2a_completion_callback_updates_parent_job_and_queues_inbox_event() {
-    let (_temp, app, base_url) = test_app(Some("secret-token"));
-    let session = app
-        .create_session("session-parent", "Parent")
-        .expect("create parent");
-    let store = PersistenceStore::open(&app.persistence).expect("open store");
-    let mut job = JobSpec::delegate(
-        "job-parent",
-        &session.id,
-        None,
-        None,
-        "judge",
-        "Review the artifacts and return a verdict.",
-        vec!["reports/judge.md".to_string()],
-        agent_runtime::delegation::DelegateWriteScope::new(vec!["reports".to_string()])
-            .expect("write scope"),
-        "Short verdict",
-        "a2a:judge",
-        5,
-    );
-    job.status = JobStatus::WaitingExternal;
-    store
-        .put_job(&JobRecord::try_from(&job).expect("job record"))
-        .expect("put parent job");
-
-    let handle = daemon::spawn_for_test(app.clone()).expect("spawn daemon");
-    let client = Client::new();
-    let response = client
-        .post(format!("{base_url}/v1/a2a/delegations/{}/complete", job.id))
-        .bearer_auth("secret-token")
-        .json(&A2ADelegationCompletionRequest {
-            outcome: A2ADelegationCompletionOutcomeRequest::Completed {
-                remote_session_id: "session-a2a-job-parent".to_string(),
-                remote_job_id: "job-a2a-job-parent".to_string(),
-                package: agent_runtime::delegation::DelegateResultPackage::new(
-                    "Judge complete",
-                    Vec::new(),
-                    vec!["artifact-1".to_string()],
-                    Vec::new(),
-                )
-                .expect("package"),
-            },
-            now: 20,
-        })
-        .send()
-        .expect("complete remote delegation");
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let job = JobSpec::try_from(
-        store
-            .get_job("job-parent")
-            .expect("get updated job")
-            .expect("updated job exists"),
-    )
-    .expect("restore updated job");
-    assert_eq!(job.status, JobStatus::Completed);
-
-    let inbox = store
-        .list_session_inbox_events_for_session(&session.id)
-        .expect("list inbox");
-    assert_eq!(inbox.len(), 1);
-    assert_eq!(inbox[0].kind, "delegation_result_ready");
-
-    handle.stop().expect("stop daemon");
-}
-
-#[test]
 fn daemon_a2a_remote_delegate_round_trip_wakes_parent_session() {
     let (provider_a_base, provider_a_requests, provider_a_handle) = spawn_json_server_sequence(vec![
         r#"{
@@ -1721,46 +1572,4 @@ fn daemon_background_worker_processes_queued_chat_jobs_and_wakes_session() {
 
     handle.stop().expect("stop daemon");
     provider_handle.join().expect("join provider");
-}
-
-fn spawn_json_server_sequence(
-    responses: Vec<String>,
-) -> (String, Receiver<String>, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-    let port = listener.local_addr().expect("local addr").port();
-    let (sender, receiver) = mpsc::channel();
-
-    let handle = thread::spawn(move || {
-        for body in responses {
-            let (mut stream, _) = listener.accept().expect("accept connection");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-
-            loop {
-                let bytes_read = stream.read(&mut buffer).expect("read request");
-                if bytes_read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..bytes_read]);
-                if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-
-            sender
-                .send(String::from_utf8_lossy(&request).into_owned())
-                .expect("send request");
-
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response");
-        }
-    });
-
-    (format!("http://127.0.0.1:{port}"), receiver, handle)
 }
