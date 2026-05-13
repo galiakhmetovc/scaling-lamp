@@ -154,12 +154,7 @@ impl Drop for PersistenceStore {
         let Some(client) = guard.take() else {
             return;
         };
-        if let Ok(handle) = std::thread::Builder::new()
-            .name("teamd-postgres-drop".to_string())
-            .spawn(move || drop(client))
-        {
-            let _ = handle.join();
-        }
+        drop_postgres_client_safely(client);
     }
 }
 
@@ -315,10 +310,15 @@ impl PersistenceStore {
         prepare_layout(&scaffold.stores)?;
 
         let mut client = connect_postgres(&scaffold.config)?;
-        configure_connection(&mut client, mode)?;
-        if mode != OpenMode::RuntimeRequestPath {
-            bootstrap_schema(&mut client)?;
-            validate_schema(&mut client)?;
+        if let Err(error) = configure_connection(&mut client, mode).and_then(|_| {
+            if mode != OpenMode::RuntimeRequestPath {
+                bootstrap_schema(&mut client)?;
+                validate_schema(&mut client)?;
+            }
+            Ok(())
+        }) {
+            drop_postgres_client_safely(client);
+            return Err(error);
         }
 
         let store = Self {
@@ -856,6 +856,15 @@ fn configure_connection(client: &mut Client, mode: OpenMode) -> Result<(), Store
     let _ = mode;
     client.batch_execute("SET client_min_messages TO WARNING;")?;
     Ok(())
+}
+
+fn drop_postgres_client_safely(client: Client) {
+    if let Ok(handle) = std::thread::Builder::new()
+        .name("teamd-postgres-drop".to_string())
+        .spawn(move || drop(client))
+    {
+        let _ = handle.join();
+    }
 }
 
 const DEFAULT_RUNTIME_DATABASE_URL: &str = "postgresql://teamd@127.0.0.1:5432/teamd";
