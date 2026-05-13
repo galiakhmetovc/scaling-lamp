@@ -5,11 +5,13 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Paper,
   Stack,
   Tab,
   Tabs,
-  TextField
+  TextField,
+  Switch
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
@@ -57,6 +59,12 @@ export function ToolsScreen({
   const [loading, setLoading] = useState(false);
   const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [newConnectorId, setNewConnectorId] = useState("");
+  const [newConnectorCommand, setNewConnectorCommand] = useState("");
+  const [newConnectorArgs, setNewConnectorArgs] = useState("[]");
+  const [newConnectorEnv, setNewConnectorEnv] = useState("{}");
+  const [newConnectorCwd, setNewConnectorCwd] = useState("");
+  const [newConnectorEnabled, setNewConnectorEnabled] = useState(true);
 
   async function load(signal?: AbortSignal) {
     setLoading(true);
@@ -100,6 +108,19 @@ export function ToolsScreen({
     }
   }
 
+  async function saveConnector(connector: McpConnector, patch: Partial<Pick<McpConnector, "command" | "args" | "env" | "cwd" | "enabled">>) {
+    setBusyConnectorId(connector.id);
+    setError(null);
+    try {
+      await api.updateMcpConnector(connector.id, patch);
+      await load();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : String(updateError));
+    } finally {
+      setBusyConnectorId(null);
+    }
+  }
+
   async function restartConnector(connector: McpConnector) {
     setBusyConnectorId(connector.id);
     setError(null);
@@ -110,6 +131,43 @@ export function ToolsScreen({
       setError(restartError instanceof Error ? restartError.message : String(restartError));
     } finally {
       setBusyConnectorId(null);
+    }
+  }
+
+  async function createConnector() {
+    const id = newConnectorId.trim();
+    const command = newConnectorCommand.trim();
+    if (!id || !command) {
+      setError("Укажи connector id и command.");
+      return;
+    }
+    try {
+      const args = JSON.parse(newConnectorArgs || "[]") as unknown;
+      const env = JSON.parse(newConnectorEnv || "{}") as unknown;
+      if (!Array.isArray(args) || !args.every((item) => typeof item === "string")) {
+        throw new Error("args должен быть JSON-массивом строк");
+      }
+      if (!env || typeof env !== "object" || Array.isArray(env) || !Object.values(env).every((item) => typeof item === "string")) {
+        throw new Error("env должен быть JSON-объектом строк");
+      }
+      await api.createMcpConnector(id, {
+        transport: "stdio",
+        command,
+        args,
+        env: env as Record<string, string>,
+        cwd: newConnectorCwd.trim() || null,
+        enabled: newConnectorEnabled
+      });
+      setNewConnectorId("");
+      setNewConnectorCommand("");
+      setNewConnectorArgs("[]");
+      setNewConnectorEnv("{}");
+      setNewConnectorCwd("");
+      setNewConnectorEnabled(true);
+      await load();
+      setTab("mcp");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
     }
   }
 
@@ -189,12 +247,72 @@ export function ToolsScreen({
       {tab === "catalog" ? <ToolCatalogTable tools={catalog?.tools ?? []} filter={filter} agent={agent} /> : null}
       {tab === "calls" ? <ToolsTable tools={recentTools} filter={filter} onFilterChange={onFilterChange} /> : null}
       {tab === "mcp" ? (
-        <McpConnectorsTable
-          connectors={connectors}
-          busyId={busyConnectorId}
-          onToggle={(connector) => void toggleConnector(connector)}
-          onRestart={(connector) => void restartConnector(connector)}
-        />
+        <Stack spacing={1.5}>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Stack spacing={1.25}>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+                <TextField
+                  size="small"
+                  label="Connector id"
+                  value={newConnectorId}
+                  onChange={(event) => setNewConnectorId(event.target.value)}
+                  placeholder="atlassian"
+                  fullWidth
+                />
+                <TextField
+                  size="small"
+                  label="Command"
+                  value={newConnectorCommand}
+                  onChange={(event) => setNewConnectorCommand(event.target.value)}
+                  placeholder="npx"
+                  fullWidth
+                />
+                <TextField
+                  size="small"
+                  label="Cwd"
+                  value={newConnectorCwd}
+                  onChange={(event) => setNewConnectorCwd(event.target.value)}
+                  placeholder="/opt/teamd/mcp или пусто"
+                  fullWidth
+                />
+              </Stack>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+                <TextField
+                  size="small"
+                  label='Args JSON, например ["-y","mcp-atlassian"]'
+                  value={newConnectorArgs}
+                  onChange={(event) => setNewConnectorArgs(event.target.value)}
+                  inputProps={{ className: "mono" }}
+                  fullWidth
+                />
+                <TextField
+                  size="small"
+                  label='Env JSON, например {"ATLASSIAN_URL":"..."}'
+                  value={newConnectorEnv}
+                  onChange={(event) => setNewConnectorEnv(event.target.value)}
+                  inputProps={{ className: "mono" }}
+                  fullWidth
+                />
+              </Stack>
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                <FormControlLabel
+                  control={<Switch checked={newConnectorEnabled} onChange={(event) => setNewConnectorEnabled(event.target.checked)} />}
+                  label="Enable after create"
+                />
+                <Button variant="contained" disabled={loading || !newConnectorId.trim() || !newConnectorCommand.trim()} onClick={() => void createConnector()}>
+                  Добавить MCP connector
+                </Button>
+              </Stack>
+            </Stack>
+          </Paper>
+          <McpConnectorsTable
+            connectors={connectors}
+            busyId={busyConnectorId}
+            onSave={(connector, patch) => void saveConnector(connector, patch)}
+            onToggle={(connector) => void toggleConnector(connector)}
+            onRestart={(connector) => void restartConnector(connector)}
+          />
+        </Stack>
       ) : null}
       {tab === "resources" ? <McpResourcesTable resources={resources} onRead={(resource) => void readResource(resource)} /> : null}
       {tab === "prompts" ? <McpPromptsTable prompts={prompts} onGet={(prompt) => void getPrompt(prompt)} /> : null}

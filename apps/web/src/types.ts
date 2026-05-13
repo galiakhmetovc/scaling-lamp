@@ -258,10 +258,51 @@ export type McpPromptGet = {
 export type DeliveryTarget = {
   target_id: string;
   kind: string;
+  address: string;
   scope: string;
+  owner_user_id?: string | null;
+  allowed_agent_ids?: string[];
+  allowed_session_ids?: string[];
+  send_policy_json?: string;
   format_policy: string;
+  created_at?: number;
   updated_at: number;
 };
+
+export type DeliveryTargetCreateOptions = {
+  kind: string;
+  address: string;
+  scope: string;
+  owner_user_id?: string | null;
+  allowed_agent_ids: string[];
+  allowed_session_ids: string[];
+  send_policy_json: string;
+  format_policy: string;
+};
+
+export type DeliveryTargetUpdatePatch = Partial<DeliveryTargetCreateOptions>;
+
+export type SessionOutputRoute = {
+  route_id: string;
+  session_id: string;
+  target_id: string;
+  filter_json: string;
+  format_policy: string;
+  enabled: boolean;
+  last_delivered_transcript_created_at?: number | null;
+  last_delivered_transcript_id?: string | null;
+  created_at?: number;
+  updated_at: number;
+};
+
+export type SessionOutputRouteCreateOptions = {
+  route_id?: string | null;
+  filter_json: string;
+  format_policy: string;
+  enabled: boolean;
+};
+
+export type SessionOutputRouteUpdatePatch = Partial<Pick<SessionOutputRoute, "filter_json" | "format_policy" | "enabled">>;
 
 export type TelegramChat = {
   telegram_chat_id: number;
@@ -293,6 +334,7 @@ export type WebSnapshot = {
   recent_tasks: SessionTask[];
   recent_tool_calls: ToolCallSummary[];
   delivery_targets: DeliveryTarget[];
+  session_output_routes: SessionOutputRoute[];
   telegram_chats: TelegramChat[];
   recent_traces: TraceLink[];
 };

@@ -1,8 +1,10 @@
 use crate::bootstrap::{
     AgentScheduleCreateOptions, AgentScheduleUpdatePatch, AgentScheduleView,
-    McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView, SessionBackgroundJob,
-    SessionDebugView, SessionPendingApproval, SessionPreferencesPatch, SessionScheduleSummary,
-    SessionSkillStatus, SessionSummary, SessionTask, SessionTranscriptView,
+    DeliveryTargetCreateOptions, DeliveryTargetUpdatePatch, McpConnectorCreateOptions,
+    McpConnectorUpdatePatch, McpConnectorView, SessionBackgroundJob, SessionDebugView,
+    SessionOutputRouteCreateOptions, SessionOutputRouteUpdatePatch, SessionPendingApproval,
+    SessionPreferencesPatch, SessionScheduleSummary, SessionSkillStatus, SessionSummary,
+    SessionTask, SessionTranscriptView,
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use agent_runtime::delegation::{DelegateResultPackage, DelegateWriteScope};
@@ -55,6 +57,7 @@ pub struct WebSnapshotResponse {
     pub recent_tasks: Vec<SessionTaskResponse>,
     pub recent_tool_calls: Vec<WebToolCallResponse>,
     pub delivery_targets: Vec<WebDeliveryTargetResponse>,
+    pub session_output_routes: Vec<WebSessionOutputRouteResponse>,
     pub telegram_chats: Vec<WebTelegramChatResponse>,
     pub recent_traces: Vec<WebTraceResponse>,
 }
@@ -126,8 +129,28 @@ pub struct WebToolCallResponse {
 pub struct WebDeliveryTargetResponse {
     pub target_id: String,
     pub kind: String,
+    pub address: String,
     pub scope: String,
+    pub owner_user_id: Option<String>,
+    pub allowed_agent_ids: Vec<String>,
+    pub allowed_session_ids: Vec<String>,
+    pub send_policy_json: String,
     pub format_policy: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSessionOutputRouteResponse {
+    pub route_id: String,
+    pub session_id: String,
+    pub target_id: String,
+    pub filter_json: String,
+    pub format_policy: String,
+    pub enabled: bool,
+    pub last_delivered_transcript_created_at: Option<i64>,
+    pub last_delivered_transcript_id: Option<String>,
+    pub created_at: i64,
     pub updated_at: i64,
 }
 
@@ -156,6 +179,29 @@ pub struct WebTraceResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryTargetCreateRequest {
+    pub target_id: String,
+    pub options: DeliveryTargetCreateOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryTargetUpdateRequest {
+    pub patch: DeliveryTargetUpdatePatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOutputRouteCreateRequest {
+    pub session_id: String,
+    pub target_id: String,
+    pub options: SessionOutputRouteCreateOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOutputRouteUpdateRequest {
+    pub patch: SessionOutputRouteUpdatePatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

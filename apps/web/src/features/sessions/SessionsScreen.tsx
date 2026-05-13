@@ -34,6 +34,7 @@ export function SessionsScreen({
   onRefresh,
   onCreateSession,
   onSelectSession,
+  onDeleteSession,
   onFilterChange,
   onSessionsPageChange,
   onPaneChange,
@@ -66,6 +67,7 @@ export function SessionsScreen({
   onRefresh: () => void;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
   onFilterChange: (value: string) => void;
   onSessionsPageChange: (offset: number) => void;
   onPaneChange: (value: SessionPane) => void;
@@ -102,6 +104,7 @@ export function SessionsScreen({
             limit={sessionsLimit}
             onFilterChange={onFilterChange}
             onSelect={onSelectSession}
+            onDelete={onDeleteSession}
             onPageChange={onSessionsPageChange}
           />
         </Box>

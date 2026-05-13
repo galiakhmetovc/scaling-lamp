@@ -13,8 +13,9 @@ pub use agent_ops::{
     AgentScheduleView,
 };
 pub use delivery_ops::{
-    DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
-    SessionOutputRouteView, TaskFollowerView,
+    DeliveryTargetCreateOptions, DeliveryTargetUpdatePatch, DeliveryTargetView,
+    SessionOutputRouteCreateOptions, SessionOutputRouteUpdatePatch, SessionOutputRouteView,
+    TaskFollowerView,
 };
 pub use disk_ops::{
     DiskPruneCandidate, DiskPruneOptions, DiskPruneReport, DiskUsageCategory, DiskUsageReport,

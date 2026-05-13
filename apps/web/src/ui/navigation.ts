@@ -29,6 +29,5 @@ export const sections: Array<{ id: SectionId; label: string; description: string
   { id: "schedules", label: "Расписания", description: "timers и delivery" },
   { id: "tools", label: "Tools", description: "вызовы и ошибки" },
   { id: "routes", label: "Маршруты", description: "delivery targets" },
-  { id: "traces", label: "Traces", description: "OTel ссылки" },
   { id: "settings", label: "Настройки", description: "read-only конфиг" }
 ];

@@ -133,14 +133,14 @@ export function AgentSkillCardsEditor({
       <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Stack direction={{ xs: "column", lg: "row" }} spacing={1.5} justifyContent="space-between">
           <Stack minWidth={0}>
-            <Typography fontWeight={700}>Skill cards</Typography>
+            <Typography fontWeight={700}>Skill folders</Typography>
             <Typography variant="caption" color="text.secondary">
-              Skills управляются как карточки. `SYSTEM.md` и `AGENTS.md` находятся в отдельном разделе.
+              Показываются все файлы из `skills/&lt;name&gt;/...`. `SKILL.md` задаёт активацию, соседние файлы — примеры, справочники и assets.
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Chip label={`catalog: ${skills.length}`} variant="outlined" />
-            <Chip label={`files: ${skillFiles.length}`} variant="outlined" />
+            <Chip label={`skill files: ${skillFiles.length}`} variant="outlined" />
             {loading || profileLoading ? <Chip label="loading" color="info" variant="outlined" /> : null}
             <Button variant="outlined" disabled={profileLoading} onClick={() => void loadProfileFiles()}>
               Обновить файлы
@@ -170,13 +170,14 @@ export function AgentSkillCardsEditor({
       </Paper>
 
       {skillFiles.length === 0 && !profileLoading ? (
-        <EmptyState title="Skill-файлы не найдены" detail="Ожидаются файлы skills/<name>/SKILL.md в профиле агента." />
+        <EmptyState title="Skill-файлы не найдены" detail="Ожидается папка skills/<name>/ с SKILL.md и опциональными соседними файлами." />
       ) : (
         <div className="skill-card-grid">
           {skillFiles.map((file) => {
             const name = skillNameFromPath(file.path) ?? file.path;
             const status = skillsByName.get(name);
             const mode = status?.mode ?? "file-only";
+            const relativePath = file.path.replace(`skills/${name}/`, "");
             return (
               <button
                 key={file.path}
@@ -191,8 +192,10 @@ export function AgentSkillCardsEditor({
                     </Typography>
                     <Chip label={mode} color={modeColor(mode)} variant="outlined" />
                   </Stack>
-                  <Typography variant="body2" color="text.secondary">
-                    {status?.description || "Skill file есть в профиле, но не найден в активном catalog snapshot."}
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: "break-word" }}>
+                    {relativePath === "SKILL.md"
+                      ? status?.description || "SKILL.md есть в профиле, но не найден в активном catalog snapshot."
+                      : `Дополнительный файл skill folder: ${relativePath}`}
                   </Typography>
                   <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                     <Chip label={`${file.byte_len} bytes`} variant="outlined" />

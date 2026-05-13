@@ -134,6 +134,17 @@ impl DeliveryRepository for PersistenceStore {
         })
     }
 
+    fn list_session_output_routes(&self) -> Result<Vec<SessionOutputRouteRecord>, StoreError> {
+        self.query_session_output_routes(
+            "SELECT route_id, session_id, target_id, filter_json, format_policy, enabled,
+                    last_delivered_transcript_created_at, last_delivered_transcript_id,
+                    created_at, updated_at
+             FROM session_output_routes
+             ORDER BY updated_at DESC, route_id ASC",
+            &[],
+        )
+    }
+
     fn list_enabled_session_output_routes(
         &self,
         session_id: &str,

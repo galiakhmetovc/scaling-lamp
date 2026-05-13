@@ -25,21 +25,23 @@ test("getPromptProfileFiles returns only SYSTEM.md and AGENTS.md in fixed order"
   );
 });
 
-test("getSkillProfileFiles returns only skill documents sorted by skill name", () => {
+test("getSkillProfileFiles returns all files under skill directories sorted by skill name and path", () => {
   const files = [
     file("SYSTEM.md"),
     file("skills/zeta/SKILL.md", "skill"),
     file("skills/alpha/SKILL.md", "skill"),
-    file("skills/alpha/README.md", "skill")
+    file("skills/alpha/README.md", "skill"),
+    file("skills/alpha/examples/demo.md", "skill")
   ];
 
   assert.deepEqual(
     getSkillProfileFiles(files).map((entry) => entry.path),
-    ["skills/alpha/SKILL.md", "skills/zeta/SKILL.md"]
+    ["skills/alpha/SKILL.md", "skills/alpha/README.md", "skills/alpha/examples/demo.md", "skills/zeta/SKILL.md"]
   );
 });
 
 test("skillNameFromPath extracts skill directory name", () => {
   assert.equal(skillNameFromPath("skills/weather/SKILL.md"), "weather");
+  assert.equal(skillNameFromPath("skills/weather/examples/today.md"), "weather");
   assert.equal(skillNameFromPath("SYSTEM.md"), null);
 });

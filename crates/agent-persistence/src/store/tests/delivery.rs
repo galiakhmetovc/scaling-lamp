@@ -123,6 +123,18 @@ fn delivery_repository_round_trips_targets_and_session_routes() {
         .expect("put disabled route");
     assert_eq!(
         store
+            .list_session_output_routes()
+            .expect("list all routes")
+            .into_iter()
+            .map(|route| route.route_id)
+            .collect::<Vec<_>>(),
+        vec![
+            "route-session-monitor-muted".to_string(),
+            "route-session-monitor-ops-status".to_string()
+        ]
+    );
+    assert_eq!(
+        store
             .list_enabled_session_output_routes("session-monitor")
             .expect("list enabled routes after disabled insert")
             .len(),

@@ -1,9 +1,27 @@
 import { Button, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
 import { EmptyState, StatusChip } from "../../components/common";
-import type { SessionTask } from "../../types";
+import type { AgentSummary, SessionSummary, SessionTask } from "../../types";
 import { formatTime, parseJsonLabel, short } from "../../utils/format";
+import { sessionTitle } from "../../ui/entityLabels";
 
-export function MeshTasksTable({ tasks, onOpenSession }: { tasks: SessionTask[]; onOpenSession: (sessionId: string) => void }) {
+function agentLabel(agentId: string | null | undefined, agents: AgentSummary[]): string {
+  if (!agentId) {
+    return "—";
+  }
+  return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+}
+
+export function MeshTasksTable({
+  tasks,
+  sessions = [],
+  agents = [],
+  onOpenSession
+}: {
+  tasks: SessionTask[];
+  sessions?: SessionSummary[];
+  agents?: AgentSummary[];
+  onOpenSession: (sessionId: string) => void;
+}) {
   if (tasks.length === 0) {
     return <EmptyState title="Task registry пуст" detail="В последних runtime данных нет agent_task/delegate задач." />;
   }
@@ -37,12 +55,17 @@ export function MeshTasksTable({ tasks, onOpenSession }: { tasks: SessionTask[];
               </TableCell>
               <TableCell>
                 <Typography variant="body2">
-                  {task.owner_agent_id || "—"} → {task.executor_agent_id || "—"}
+                  {agentLabel(task.owner_agent_id, agents)} → {agentLabel(task.executor_agent_id, agents)}
                 </Typography>
                 {task.source_session_id ? (
                   <Button size="small" variant="text" onClick={() => onOpenSession(task.source_session_id!)}>
-                    {short(task.source_session_id, 28)}
+                    {sessionTitle(task.source_session_id, sessions).primary}
                   </Button>
+                ) : null}
+                {task.source_session_id ? (
+                  <Typography variant="caption" color="text.secondary" className="mono" display="block">
+                    {short(task.source_session_id, 28)}
+                  </Typography>
                 ) : null}
               </TableCell>
               <TableCell sx={{ maxWidth: 460 }}>

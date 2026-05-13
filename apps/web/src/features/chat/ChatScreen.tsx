@@ -53,6 +53,7 @@ export function ChatScreen({
   onRefresh,
   onCreateSession,
   onSelectSession,
+  onDeleteSession,
   onFilterChange,
   onSessionsPageChange,
   onMessageChange,
@@ -87,6 +88,7 @@ export function ChatScreen({
   onRefresh: () => void;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
   onFilterChange: (value: string) => void;
   onSessionsPageChange: (offset: number) => void;
   onMessageChange: (value: string) => void;
@@ -234,6 +236,7 @@ export function ChatScreen({
                 onSelectSession(id);
                 setSessionsOpen(false);
               }}
+              onDelete={onDeleteSession}
               onPageChange={onSessionsPageChange}
             />
           </Stack>

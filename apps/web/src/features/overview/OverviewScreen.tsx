@@ -10,7 +10,8 @@ export function OverviewScreen({
   loading,
   toolErrors,
   activeRuns,
-  onRefresh
+  onRefresh,
+  onOpenSession
 }: {
   snapshot: WebSnapshot | null;
   sessions: SessionSummary[];
@@ -18,6 +19,7 @@ export function OverviewScreen({
   toolErrors: number;
   activeRuns: number;
   onRefresh: () => void;
+  onOpenSession: (sessionId: string) => void;
 }) {
   if (!snapshot) {
     return <EmptyState title="Snapshot недоступен" detail="Нет данных от /v1/web/snapshot." />;
@@ -122,7 +124,7 @@ export function OverviewScreen({
         </Paper>
       </Box>
 
-      <RunsTable runs={snapshot.recent_runs} />
+      <RunsTable runs={snapshot.recent_runs} sessions={sessions} onOpenSession={onOpenSession} />
     </Stack>
   );
 }

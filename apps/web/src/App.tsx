@@ -24,7 +24,11 @@ import { JsonBlock, SectionHeader } from "./components/common";
 import type {
   PendingApproval,
   PendingChatMessage,
+  DeliveryTargetCreateOptions,
+  DeliveryTargetUpdatePatch,
   SessionDebug,
+  SessionOutputRouteCreateOptions,
+  SessionOutputRouteUpdatePatch,
   SessionPreferencesPatch,
   SessionSummary,
   SessionTask,
@@ -474,6 +478,63 @@ export function App() {
     }
   }
 
+  async function deleteSession(sessionId: string) {
+    try {
+      await api.deleteSession(sessionId);
+      setNotice(`Сессия удалена: ${sessionId}`);
+      if (selectedSessionId === sessionId) {
+        setSelectedSessionId(null);
+      }
+      await loadData(undefined, sessionsOffset);
+    } catch (deleteError) {
+      setNotice(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    }
+  }
+
+  async function createDeliveryTarget(targetId: string, options: DeliveryTargetCreateOptions) {
+    try {
+      await api.createDeliveryTarget(targetId, options);
+      setNotice(`Delivery target создан: ${targetId}`);
+      await loadData();
+    } catch (routeError) {
+      setNotice(routeError instanceof Error ? routeError.message : String(routeError));
+      throw routeError;
+    }
+  }
+
+  async function updateDeliveryTarget(targetId: string, patch: DeliveryTargetUpdatePatch) {
+    try {
+      await api.updateDeliveryTarget(targetId, patch);
+      setNotice(`Delivery target обновлён: ${targetId}`);
+      await loadData();
+    } catch (routeError) {
+      setNotice(routeError instanceof Error ? routeError.message : String(routeError));
+      throw routeError;
+    }
+  }
+
+  async function createSessionOutputRoute(sessionId: string, targetId: string, options: SessionOutputRouteCreateOptions) {
+    try {
+      await api.createSessionOutputRoute(sessionId, targetId, options);
+      setNotice(`Route создан: ${sessionId} → ${targetId}`);
+      await loadData();
+    } catch (routeError) {
+      setNotice(routeError instanceof Error ? routeError.message : String(routeError));
+      throw routeError;
+    }
+  }
+
+  async function updateSessionOutputRoute(routeId: string, patch: SessionOutputRouteUpdatePatch) {
+    try {
+      await api.updateSessionOutputRoute(routeId, patch);
+      setNotice(`Route обновлён: ${routeId}`);
+      await loadData();
+    } catch (routeError) {
+      setNotice(routeError instanceof Error ? routeError.message : String(routeError));
+      throw routeError;
+    }
+  }
+
   function refreshSelectedSession() {
     if (selectedSessionId) {
       void loadSessionDetails(selectedSessionId);
@@ -503,6 +564,10 @@ export function App() {
             toolErrors={toolErrors}
             activeRuns={activeRuns}
             onRefresh={() => void loadData()}
+            onOpenSession={(sessionId) => {
+              setSelectedSessionId(sessionId);
+              setSection("chat");
+            }}
           />
         );
       case "operations":
@@ -556,6 +621,7 @@ export function App() {
             onRefresh={refreshSelectedSession}
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
+            onDeleteSession={(sessionId) => void deleteSession(sessionId)}
             onFilterChange={setSessionFilter}
             onSessionsPageChange={setSessionsOffset}
             onMessageChange={setMessage}
@@ -593,6 +659,7 @@ export function App() {
             onRefresh={refreshSelectedSession}
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
+            onDeleteSession={(sessionId: string) => void deleteSession(sessionId)}
             onFilterChange={setSessionFilter}
             onSessionsPageChange={setSessionsOffset}
             onPaneChange={setSessionPane}
@@ -604,7 +671,7 @@ export function App() {
           />
         );
       case "files":
-        return <FilesScreen selectedSession={selectedSession} />;
+        return <FilesScreen selectedSession={selectedSession} sessions={sessions} agents={snapshot?.agents ?? []} />;
       case "memory":
         return <MemoryScreen selectedSession={selectedSession} />;
       case "skills":
@@ -656,7 +723,21 @@ export function App() {
         return (
           <>
             <SectionHeader title="Маршруты доставки" subtitle="Delivery targets и Telegram bindings." />
-            <RoutesView targets={snapshot?.delivery_targets ?? []} chats={snapshot?.telegram_chats ?? []} />
+            <RoutesView
+              targets={snapshot?.delivery_targets ?? []}
+              outputRoutes={snapshot?.session_output_routes ?? []}
+              chats={snapshot?.telegram_chats ?? []}
+              sessions={snapshot?.sessions ?? sessions}
+              agents={snapshot?.agents ?? []}
+              onOpenSession={(sessionId) => {
+                setSelectedSessionId(sessionId);
+                setSection("chat");
+              }}
+              onCreateTarget={createDeliveryTarget}
+              onUpdateTarget={updateDeliveryTarget}
+              onCreateOutputRoute={createSessionOutputRoute}
+              onUpdateOutputRoute={updateSessionOutputRoute}
+            />
           </>
         );
       case "traces":

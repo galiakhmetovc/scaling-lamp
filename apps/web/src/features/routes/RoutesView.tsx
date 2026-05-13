@@ -1,87 +1,54 @@
-import { Box, Divider, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
-import { EmptyState } from "../../components/common";
-import type { DeliveryTarget, TelegramChat } from "../../types";
-import { formatTime, short } from "../../utils/format";
+import { Stack } from "@mui/material";
+import type {
+  AgentSummary,
+  DeliveryTarget,
+  DeliveryTargetCreateOptions,
+  DeliveryTargetUpdatePatch,
+  SessionOutputRoute,
+  SessionOutputRouteCreateOptions,
+  SessionOutputRouteUpdatePatch,
+  SessionSummary,
+  TelegramChat
+} from "../../types";
+import { DeliveryTargetsPanel } from "./DeliveryTargetsPanel";
+import { SessionOutputRoutesPanel } from "./SessionOutputRoutesPanel";
+import { TelegramBindingsPanel } from "./TelegramBindingsPanel";
 
-export function RoutesView({ targets, chats }: { targets: DeliveryTarget[]; chats: TelegramChat[] }) {
+export function RoutesView({
+  targets,
+  outputRoutes,
+  chats,
+  sessions,
+  agents,
+  onOpenSession,
+  onCreateTarget,
+  onUpdateTarget,
+  onCreateOutputRoute,
+  onUpdateOutputRoute
+}: {
+  targets: DeliveryTarget[];
+  outputRoutes: SessionOutputRoute[];
+  chats: TelegramChat[];
+  sessions: SessionSummary[];
+  agents: AgentSummary[];
+  onOpenSession: (sessionId: string) => void;
+  onCreateTarget: (targetId: string, options: DeliveryTargetCreateOptions) => Promise<void>;
+  onUpdateTarget: (targetId: string, patch: DeliveryTargetUpdatePatch) => Promise<void>;
+  onCreateOutputRoute: (sessionId: string, targetId: string, options: SessionOutputRouteCreateOptions) => Promise<void>;
+  onUpdateOutputRoute: (routeId: string, patch: SessionOutputRouteUpdatePatch) => Promise<void>;
+}) {
   return (
     <Stack spacing={2}>
-      <Paper variant="outlined">
-        <Box sx={{ px: 1.5, py: 1 }}>
-          <Typography fontWeight={700}>Delivery targets</Typography>
-        </Box>
-        <Divider />
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Target</TableCell>
-              <TableCell>Kind</TableCell>
-              <TableCell>Scope</TableCell>
-              <TableCell>Format</TableCell>
-              <TableCell>Обновлён</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {targets.map((target) => (
-              <TableRow key={target.target_id} hover>
-                <TableCell className="mono">{target.target_id}</TableCell>
-                <TableCell>{target.kind}</TableCell>
-                <TableCell>{target.scope}</TableCell>
-                <TableCell>{target.format_policy}</TableCell>
-                <TableCell>{formatTime(target.updated_at)}</TableCell>
-              </TableRow>
-            ))}
-            {targets.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5}>
-                  <EmptyState title="Delivery targets не настроены" />
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-      </Paper>
-
-      <Paper variant="outlined">
-        <Box sx={{ px: 1.5, py: 1 }}>
-          <Typography fontWeight={700}>Telegram bindings</Typography>
-        </Box>
-        <Divider />
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Chat ID</TableCell>
-              <TableCell>Scope</TableCell>
-              <TableCell>Сессия</TableCell>
-              <TableCell>Агент</TableCell>
-              <TableCell>Queue</TableCell>
-              <TableCell>Обновлён</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {chats.map((chat) => (
-              <TableRow key={chat.telegram_chat_id} hover>
-                <TableCell className="mono">{chat.telegram_chat_id}</TableCell>
-                <TableCell>{chat.scope}</TableCell>
-                <TableCell className="mono">{short(chat.selected_session_id, 28)}</TableCell>
-                <TableCell>{chat.default_agent_profile_id || "—"}</TableCell>
-                <TableCell>
-                  {chat.inbound_queue_mode}
-                  {chat.inbound_coalesce_window_ms ? ` · ${chat.inbound_coalesce_window_ms}ms` : ""}
-                </TableCell>
-                <TableCell>{formatTime(chat.updated_at)}</TableCell>
-              </TableRow>
-            ))}
-            {chats.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6}>
-                  <EmptyState title="Telegram bindings не найдены" />
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-      </Paper>
+      <DeliveryTargetsPanel targets={targets} sessions={sessions} agents={agents} onCreate={onCreateTarget} onUpdate={onUpdateTarget} />
+      <SessionOutputRoutesPanel
+        routes={outputRoutes}
+        targets={targets}
+        sessions={sessions}
+        onOpenSession={onOpenSession}
+        onCreate={onCreateOutputRoute}
+        onUpdate={onUpdateOutputRoute}
+      />
+      <TelegramBindingsPanel chats={chats} sessions={sessions} agents={agents} onOpenSession={onOpenSession} />
     </Stack>
   );
 }

@@ -2,8 +2,8 @@ use super::*;
 use crate::about::{APP_BUILD_ID, APP_COMMIT, APP_TREE_STATE, APP_VERSION};
 use crate::http::types::{
     SessionSummaryResponse, SessionTaskResponse, WebAgentResponse, WebDeliveryTargetResponse,
-    WebEventBusResponse, WebRunResponse, WebRuntimeStatusResponse, WebSnapshotResponse,
-    WebTelegramChatResponse, WebToolCallResponse, WebTraceResponse,
+    WebEventBusResponse, WebRunResponse, WebRuntimeStatusResponse, WebSessionOutputRouteResponse,
+    WebSnapshotResponse, WebTelegramChatResponse, WebToolCallResponse, WebTraceResponse,
 };
 use crate::redaction::{redact_sensitive_option, redact_sensitive_text};
 use agent_persistence::{
@@ -103,6 +103,18 @@ fn build_web_snapshot(app: &App) -> Result<WebSnapshotResponse, BootstrapError> 
         .collect::<Vec<_>>();
     delivery_targets.sort_by(|left, right| left.target_id.cmp(&right.target_id));
 
+    let mut session_output_routes = store
+        .list_session_output_routes()?
+        .into_iter()
+        .map(WebSessionOutputRouteResponse::from)
+        .collect::<Vec<_>>();
+    session_output_routes.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.route_id.cmp(&right.route_id))
+    });
+
     let mut telegram_chats = store
         .list_telegram_chat_bindings()?
         .into_iter()
@@ -158,6 +170,7 @@ fn build_web_snapshot(app: &App) -> Result<WebSnapshotResponse, BootstrapError> 
         recent_tasks,
         recent_tool_calls,
         delivery_targets,
+        session_output_routes,
         telegram_chats,
         recent_traces,
     })
@@ -257,11 +270,38 @@ impl From<agent_persistence::ToolCallRecord> for WebToolCallResponse {
 
 impl From<agent_persistence::DeliveryTargetRecord> for WebDeliveryTargetResponse {
     fn from(value: agent_persistence::DeliveryTargetRecord) -> Self {
+        let allowed_agent_ids =
+            serde_json::from_str(&value.allowed_agent_ids_json).unwrap_or_else(|_| Vec::new());
+        let allowed_session_ids =
+            serde_json::from_str(&value.allowed_session_ids_json).unwrap_or_else(|_| Vec::new());
         Self {
             target_id: value.target_id,
             kind: value.kind,
+            address: value.address,
             scope: value.scope,
+            owner_user_id: value.owner_user_id,
+            allowed_agent_ids,
+            allowed_session_ids,
+            send_policy_json: value.send_policy_json,
             format_policy: value.format_policy,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<agent_persistence::SessionOutputRouteRecord> for WebSessionOutputRouteResponse {
+    fn from(value: agent_persistence::SessionOutputRouteRecord) -> Self {
+        Self {
+            route_id: value.route_id,
+            session_id: value.session_id,
+            target_id: value.target_id,
+            filter_json: value.filter_json,
+            format_policy: value.format_policy,
+            enabled: value.enabled,
+            last_delivered_transcript_created_at: value.last_delivered_transcript_created_at,
+            last_delivered_transcript_id: value.last_delivered_transcript_id,
+            created_at: value.created_at,
             updated_at: value.updated_at,
         }
     }

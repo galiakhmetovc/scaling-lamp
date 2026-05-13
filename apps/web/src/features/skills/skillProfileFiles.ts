@@ -18,7 +18,7 @@ export function isValidSkillName(value: string): boolean {
 }
 
 export function skillNameFromPath(path: string): string | null {
-  const match = /^skills\/([^/]+)\/SKILL\.md$/.exec(path);
+  const match = /^skills\/([^/]+)\//.exec(path);
   return match?.[1] ?? null;
 }
 
@@ -38,6 +38,23 @@ export function getSkillProfileFiles(files: SkillProfileFileEntry[]): SkillProfi
   return files
     .filter((file) => skillNameFromPath(file.path))
     .sort((left, right) => {
-      return (skillNameFromPath(left.path) ?? left.path).localeCompare(skillNameFromPath(right.path) ?? right.path, "ru");
+      const leftName = skillNameFromPath(left.path) ?? left.path;
+      const rightName = skillNameFromPath(right.path) ?? right.path;
+      const byName = leftName.localeCompare(rightName, "ru");
+      if (byName !== 0) {
+        return byName;
+      }
+      if (left.path.endsWith("/SKILL.md") && !right.path.endsWith("/SKILL.md")) {
+        return -1;
+      }
+      if (!left.path.endsWith("/SKILL.md") && right.path.endsWith("/SKILL.md")) {
+        return 1;
+      }
+      const leftDepth = left.path.split("/").length;
+      const rightDepth = right.path.split("/").length;
+      if (leftDepth !== rightDepth) {
+        return leftDepth - rightDepth;
+      }
+      return left.path.localeCompare(right.path, "ru");
     });
 }

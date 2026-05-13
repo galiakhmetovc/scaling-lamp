@@ -1,16 +1,23 @@
-import { Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
+import { Button, Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
 import { EmptyState } from "../../components/common";
-import type { DeliveryTarget, TelegramChat, WebEventBus } from "../../types";
+import type { AgentSummary, DeliveryTarget, SessionSummary, TelegramChat, WebEventBus } from "../../types";
 import { formatTime, short } from "../../utils/format";
+import { describeDeliveryTarget, describeTelegramChat, sessionTitle } from "../../ui/entityLabels";
 
 export function MeshRoutesPanel({
   eventBus,
   targets,
-  chats
+  chats,
+  sessions,
+  agents,
+  onOpenSession
 }: {
   eventBus: WebEventBus;
   targets: DeliveryTarget[];
   chats: TelegramChat[];
+  sessions: SessionSummary[];
+  agents: AgentSummary[];
+  onOpenSession: (sessionId: string) => void;
 }) {
   return (
     <Stack spacing={1.5}>
@@ -46,15 +53,23 @@ export function MeshRoutesPanel({
               </TableRow>
             </TableHead>
             <TableBody>
-              {targets.map((target) => (
-                <TableRow key={target.target_id} hover>
-                  <TableCell className="mono">{target.target_id}</TableCell>
-                  <TableCell>{target.kind}</TableCell>
-                  <TableCell>{target.scope}</TableCell>
-                  <TableCell>{target.format_policy}</TableCell>
-                  <TableCell>{formatTime(target.updated_at)}</TableCell>
-                </TableRow>
-              ))}
+              {targets.map((target) => {
+                const label = describeDeliveryTarget(target, sessions, agents);
+                return (
+                  <TableRow key={target.target_id} hover>
+                    <TableCell>
+                      <Typography fontWeight={700}>{label.primary}</Typography>
+                      <Typography variant="caption" color="text.secondary" className="mono">
+                        {label.technical}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>{target.kind}</TableCell>
+                    <TableCell>{label.secondary}</TableCell>
+                    <TableCell>{target.format_policy}</TableCell>
+                    <TableCell>{formatTime(target.updated_at)}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         ) : null}
@@ -77,18 +92,40 @@ export function MeshRoutesPanel({
               </TableRow>
             </TableHead>
             <TableBody>
-              {chats.map((chat) => (
-                <TableRow key={chat.telegram_chat_id} hover>
-                  <TableCell className="mono">{chat.telegram_chat_id}</TableCell>
-                  <TableCell>{chat.scope}</TableCell>
-                  <TableCell className="mono">{short(chat.selected_session_id, 28)}</TableCell>
-                  <TableCell>{chat.default_agent_profile_id || "—"}</TableCell>
-                  <TableCell>
-                    {chat.inbound_queue_mode}
-                    {chat.inbound_coalesce_window_ms ? ` · ${chat.inbound_coalesce_window_ms}ms` : ""}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {chats.map((chat) => {
+                const label = describeTelegramChat(chat, sessions, agents);
+                const linkedSession = sessionTitle(chat.selected_session_id, sessions);
+                return (
+                  <TableRow key={chat.telegram_chat_id} hover>
+                    <TableCell>
+                      <Typography fontWeight={700}>{label.primary}</Typography>
+                      <Typography variant="caption" color="text.secondary" className="mono">
+                        {label.technical}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>{chat.scope}</TableCell>
+                    <TableCell>
+                      {chat.selected_session_id ? (
+                        <Button size="small" variant="text" onClick={() => onOpenSession(chat.selected_session_id!)} sx={{ textTransform: "none" }}>
+                          {linkedSession.primary}
+                        </Button>
+                      ) : (
+                        "—"
+                      )}
+                      {chat.selected_session_id ? (
+                        <Typography variant="caption" color="text.secondary" className="mono" display="block">
+                          {short(chat.selected_session_id, 28)}
+                        </Typography>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{chat.default_agent_profile_id || "—"}</TableCell>
+                    <TableCell>
+                      {chat.inbound_queue_mode}
+                      {chat.inbound_coalesce_window_ms ? ` · ${chat.inbound_coalesce_window_ms}ms` : ""}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         ) : null}

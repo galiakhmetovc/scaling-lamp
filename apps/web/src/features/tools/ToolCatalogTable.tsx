@@ -1,5 +1,9 @@
 import {
+  Button,
   Chip,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Paper,
   Stack,
   Table,
@@ -10,6 +14,7 @@ import {
   TableRow,
   Typography
 } from "@mui/material";
+import { useState } from "react";
 import { EmptyState, JsonBlock } from "../../components/common";
 import type { AgentDetail, ToolCatalogItem } from "../../types";
 import { agentAllowsTool, groupToolCatalogByFamily } from "./toolCatalog";
@@ -35,6 +40,7 @@ export function ToolCatalogTable({
   filter: string;
   agent: AgentDetail | null;
 }) {
+  const [schemaTool, setSchemaTool] = useState<ToolCatalogItem | null>(null);
   const normalizedFilter = filter.trim().toLowerCase();
   const filtered = tools.filter((tool) => {
     if (!normalizedFilter) {
@@ -60,7 +66,8 @@ export function ToolCatalogTable({
   }
 
   return (
-    <Stack spacing={1.5}>
+    <>
+      <Stack spacing={1.5}>
       {groups.map((group) => (
         <TableContainer key={group.family} component={Paper} variant="outlined">
           <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1 }}>
@@ -115,8 +122,10 @@ export function ToolCatalogTable({
                       {tool.title ? <Typography fontWeight={700}>{tool.title}</Typography> : null}
                       <Typography variant="body2">{tool.description}</Typography>
                     </TableCell>
-                    <TableCell sx={{ minWidth: 280, maxWidth: 420 }}>
-                      <JsonBlock value={tool.input_schema} />
+                    <TableCell sx={{ minWidth: 160 }}>
+                      <Button size="small" variant="outlined" onClick={() => setSchemaTool(tool)}>
+                        Schema
+                      </Button>
                     </TableCell>
                   </TableRow>
                 );
@@ -125,6 +134,11 @@ export function ToolCatalogTable({
           </Table>
         </TableContainer>
       ))}
-    </Stack>
+      </Stack>
+      <Dialog open={Boolean(schemaTool)} onClose={() => setSchemaTool(null)} fullWidth maxWidth="md">
+        <DialogTitle>{schemaTool?.id} schema</DialogTitle>
+        <DialogContent>{schemaTool ? <JsonBlock value={schemaTool.input_schema} /> : null}</DialogContent>
+      </Dialog>
+    </>
   );
 }

@@ -197,6 +197,7 @@ pub trait DeliveryRepository {
         &self,
         route_id: &str,
     ) -> Result<Option<SessionOutputRouteRecord>, StoreError>;
+    fn list_session_output_routes(&self) -> Result<Vec<SessionOutputRouteRecord>, StoreError>;
     fn list_enabled_session_output_routes(
         &self,
         session_id: &str,

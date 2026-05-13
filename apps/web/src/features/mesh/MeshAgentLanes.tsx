@@ -1,6 +1,7 @@
 import { Box, Chip, Divider, Paper, Stack, Typography } from "@mui/material";
 import { EmptyState, StatusChip } from "../../components/common";
 import { formatTime, short } from "../../utils/format";
+import { describeAgentModel } from "../../ui/entityLabels";
 import type { AgentLane } from "./meshModel";
 
 export function MeshAgentLanes({ lanes, onOpenSession }: { lanes: AgentLane[]; onOpenSession: (sessionId: string) => void }) {
@@ -18,6 +19,9 @@ export function MeshAgentLanes({ lanes, onOpenSession }: { lanes: AgentLane[]; o
                 <Typography fontWeight={700}>{lane.agent.name}</Typography>
                 <Typography variant="caption" color="text.secondary" className="mono">
                   {lane.agent.id} · {lane.agent.template_kind} · updated={formatTime(lane.lastUpdated)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  model: {describeAgentModel(lane.agent, lane.sessions)} · workspace: {lane.agent.default_workspace_root || "runtime/session default"}
                 </Typography>
               </Stack>
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>

@@ -9,6 +9,9 @@ import type {
   AgentUpdatePatch,
   ArtifactFile,
   ArtifactFileSummary,
+  DeliveryTarget,
+  DeliveryTargetCreateOptions,
+  DeliveryTargetUpdatePatch,
   KvList,
   MemoryRecallPreview,
   McpConnector,
@@ -20,6 +23,9 @@ import type {
   SemanticMemoryList,
   SemanticMemorySearch,
   SessionDebug,
+  SessionOutputRoute,
+  SessionOutputRouteCreateOptions,
+  SessionOutputRouteUpdatePatch,
   SessionPreferencesPatch,
   SessionSkillStatus,
   SessionSummary,
@@ -80,6 +86,45 @@ export const api = {
   },
   mcpConnectors(signal?: AbortSignal) {
     return requestJson<McpConnector[]>(endpoint("/v1/mcp/connectors"), { signal });
+  },
+  deliveryTargets(signal?: AbortSignal) {
+    return requestJson<unknown>(endpoint("/v1/delivery-targets"), { signal });
+  },
+  createDeliveryTarget(targetId: string, options: DeliveryTargetCreateOptions) {
+    return requestJson<unknown>(endpoint("/v1/delivery-targets"), {
+      method: "POST",
+      body: JSON.stringify({ target_id: targetId, options })
+    });
+  },
+  updateDeliveryTarget(targetId: string, patch: DeliveryTargetUpdatePatch) {
+    return requestJson<unknown>(endpoint(`/v1/delivery-targets/${encodeURIComponent(targetId)}`), {
+      method: "PATCH",
+      body: JSON.stringify({ patch })
+    });
+  },
+  sessionOutputRoutes(signal?: AbortSignal) {
+    return requestJson<unknown>(endpoint("/v1/session-output-routes"), { signal });
+  },
+  createSessionOutputRoute(sessionId: string, targetId: string, options: SessionOutputRouteCreateOptions) {
+    return requestJson<unknown>(endpoint("/v1/session-output-routes"), {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, target_id: targetId, options })
+    });
+  },
+  updateSessionOutputRoute(routeId: string, patch: SessionOutputRouteUpdatePatch) {
+    return requestJson<unknown>(endpoint(`/v1/session-output-routes/${encodeURIComponent(routeId)}`), {
+      method: "PATCH",
+      body: JSON.stringify({ patch })
+    });
+  },
+  createMcpConnector(
+    id: string,
+    options: Pick<McpConnector, "transport" | "command" | "args" | "env" | "cwd" | "enabled">
+  ) {
+    return requestJson<{ connector: McpConnector }>(endpoint("/v1/mcp/connectors"), {
+      method: "POST",
+      body: JSON.stringify({ id, options })
+    });
   },
   mcpResources(options: { connectorId?: string; query?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) {
     return requestJson<McpResourceList>(

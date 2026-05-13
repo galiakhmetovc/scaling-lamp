@@ -40,7 +40,8 @@ test("buildAgentLanes groups sessions, runs, tasks, and outputs by agent", () =>
       }
     ],
     telegram_chats: [{ telegram_chat_id: 123, scope: "private", default_agent_profile_id: "default", inbound_queue_mode: "coalesce", updated_at: 31 }],
-    delivery_targets: [{ target_id: "telegram-default", kind: "telegram", scope: "default", format_policy: "summary", updated_at: 32 }]
+    delivery_targets: [{ target_id: "telegram-default", kind: "telegram", address: "123", scope: "default", format_policy: "summary", updated_at: 32 }],
+    session_output_routes: []
   } as WebSnapshot;
 
   const lanes = buildAgentLanes(snapshot);

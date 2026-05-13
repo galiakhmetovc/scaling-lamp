@@ -30,6 +30,7 @@ import type {
   AgentSchedule,
   AgentScheduleDeliveryMode,
   AgentScheduleMode,
+  AgentScheduleUpdatePatch,
   AgentSummary,
   SessionSummary
 } from "../../types";
@@ -75,6 +76,31 @@ const initialDraft: Draft = {
   enabled: true
 };
 
+function draftFromSchedule(schedule: AgentSchedule): Draft {
+  return {
+    id: schedule.id,
+    agent_identifier: schedule.agent_profile_id,
+    prompt: schedule.prompt,
+    mode: schedule.mode,
+    delivery_mode: schedule.delivery_mode,
+    target_session_id: schedule.target_session_id ?? "",
+    interval_seconds: schedule.interval_seconds,
+    enabled: schedule.enabled
+  };
+}
+
+function patchFromDraft(draft: Draft): AgentScheduleUpdatePatch {
+  return {
+    agent_identifier: draft.agent_identifier || null,
+    prompt: draft.prompt.trim(),
+    mode: draft.mode,
+    delivery_mode: draft.delivery_mode,
+    target_session_id: draft.delivery_mode === "existing_session" ? draft.target_session_id : null,
+    interval_seconds: Number(draft.interval_seconds),
+    enabled: draft.enabled
+  };
+}
+
 export function SchedulesScreen({
   agents,
   sessions,
@@ -90,6 +116,8 @@ export function SchedulesScreen({
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [selected, setSelected] = useState<AgentSchedule | null>(null);
+  const [editing, setEditing] = useState<AgentSchedule | null>(null);
+  const [editDraft, setEditDraft] = useState<Draft>(initialDraft);
 
   async function loadSchedules(signal?: AbortSignal) {
     setLoading(true);
@@ -174,6 +202,29 @@ export function SchedulesScreen({
       await loadSchedules();
     } catch (runError) {
       setNotice(runError instanceof Error ? runError.message : String(runError));
+    }
+  }
+
+  async function saveEditedSchedule() {
+    if (!editing) {
+      return;
+    }
+    const prompt = editDraft.prompt.trim();
+    if (!prompt) {
+      setNotice("Prompt расписания не может быть пустым.");
+      return;
+    }
+    if (editDraft.delivery_mode === "existing_session" && !editDraft.target_session_id) {
+      setNotice("Для delivery existing_session нужна target session.");
+      return;
+    }
+    try {
+      const result = await api.updateAgentSchedule(editing.id, patchFromDraft(editDraft));
+      setNotice(result.message);
+      setEditing(null);
+      await loadSchedules();
+    } catch (saveError) {
+      setNotice(saveError instanceof Error ? saveError.message : String(saveError));
     }
   }
 
@@ -377,6 +428,16 @@ export function SchedulesScreen({
                       <Button size="small" onClick={() => void runNow(schedule)}>
                         Run now
                       </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          setEditing(schedule);
+                          setEditDraft(draftFromSchedule(schedule));
+                        }}
+                      >
+                        Редактировать
+                      </Button>
                       <Button size="small" color="error" onClick={() => void deleteSchedule(schedule)}>
                         Удалить
                       </Button>
@@ -408,6 +469,109 @@ export function SchedulesScreen({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSelected(null)}>Закрыть</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={Boolean(editing)} onClose={() => setEditing(null)} fullWidth maxWidth="md">
+        <DialogTitle>Редактировать расписание: {editing?.id}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+              <TextField label="id" value={editDraft.id} size="small" fullWidth disabled />
+              <FormControl size="small" fullWidth>
+                <InputLabel id="schedule-edit-agent-label">Агент</InputLabel>
+                <Select
+                  labelId="schedule-edit-agent-label"
+                  label="Агент"
+                  value={editDraft.agent_identifier}
+                  onChange={(event) => setEditDraft({ ...editDraft, agent_identifier: event.target.value })}
+                >
+                  {agents.map((agent) => (
+                    <MenuItem key={agent.id} value={agent.id}>
+                      {agent.name} ({agent.id})
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <TextField
+                label="Интервал, секунд"
+                value={editDraft.interval_seconds}
+                onChange={(event) =>
+                  setEditDraft({ ...editDraft, interval_seconds: Number.parseInt(event.target.value || "0", 10) })
+                }
+                size="small"
+                type="number"
+                fullWidth
+              />
+            </Stack>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="schedule-edit-mode-label">Mode</InputLabel>
+                <Select
+                  labelId="schedule-edit-mode-label"
+                  label="Mode"
+                  value={editDraft.mode}
+                  onChange={(event) => setEditDraft({ ...editDraft, mode: event.target.value as AgentScheduleMode })}
+                >
+                  <MenuItem value="interval">interval</MenuItem>
+                  <MenuItem value="after_completion">after_completion</MenuItem>
+                  <MenuItem value="once">once</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="schedule-edit-delivery-label">Delivery</InputLabel>
+                <Select
+                  labelId="schedule-edit-delivery-label"
+                  label="Delivery"
+                  value={editDraft.delivery_mode}
+                  onChange={(event) =>
+                    setEditDraft({ ...editDraft, delivery_mode: event.target.value as AgentScheduleDeliveryMode })
+                  }
+                >
+                  <MenuItem value="fresh_session">fresh_session</MenuItem>
+                  <MenuItem value="existing_session">existing_session</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" fullWidth disabled={editDraft.delivery_mode !== "existing_session"}>
+                <InputLabel id="schedule-edit-target-label">Target session</InputLabel>
+                <Select
+                  labelId="schedule-edit-target-label"
+                  label="Target session"
+                  value={editDraft.target_session_id}
+                  onChange={(event) => setEditDraft({ ...editDraft, target_session_id: event.target.value })}
+                >
+                  {sessions.map((session) => (
+                    <MenuItem key={session.id} value={session.id}>
+                      {session.title} ({short(session.id, 18)})
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Stack>
+            <TextField
+              label="Prompt"
+              value={editDraft.prompt}
+              onChange={(event) => setEditDraft({ ...editDraft, prompt: event.target.value })}
+              size="small"
+              multiline
+              minRows={5}
+              fullWidth
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={editDraft.enabled}
+                  onChange={(event) => setEditDraft({ ...editDraft, enabled: event.target.checked })}
+                />
+              }
+              label="Включено"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditing(null)}>Отмена</Button>
+          <Button variant="contained" onClick={() => void saveEditedSchedule()}>
+            Сохранить
+          </Button>
         </DialogActions>
       </Dialog>
     </Stack>

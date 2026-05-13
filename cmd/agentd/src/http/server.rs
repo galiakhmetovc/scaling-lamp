@@ -1,6 +1,7 @@
 mod a2a;
 mod agents;
 mod chat;
+mod delivery;
 mod disk;
 mod mcp;
 mod memory;
@@ -78,6 +79,18 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Get, "/v1/disk/usage") => disk::handle_disk_usage(app, request),
         (&tiny_http::Method::Post, "/v1/disk/prune") => disk::handle_disk_prune(app, request),
         (&tiny_http::Method::Get, "/v1/web/snapshot") => web::handle_web_snapshot(app, request),
+        (&tiny_http::Method::Get, "/v1/delivery-targets") => {
+            delivery::handle_list_delivery_targets(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/delivery-targets") => {
+            delivery::handle_create_delivery_target(app, request)
+        }
+        (&tiny_http::Method::Get, "/v1/session-output-routes") => {
+            delivery::handle_list_session_output_routes(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/session-output-routes") => {
+            delivery::handle_create_session_output_route(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/diagnostics/tail") => {
             status::handle_diagnostics_tail(app, request)
         }
@@ -175,6 +188,12 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         }
         _ if request.url().starts_with("/v1/a2a/delegations/") => {
             a2a::handle_nested_routes(app, request)
+        }
+        _ if request.url().starts_with("/v1/delivery-targets/") => {
+            delivery::handle_delivery_target_nested_routes(app, request)
+        }
+        _ if request.url().starts_with("/v1/session-output-routes/") => {
+            delivery::handle_session_output_route_nested_routes(app, request)
         }
         _ if request.url().starts_with("/v1/agent-schedules/") => {
             agents::handle_agent_schedule_nested_routes(app, request)

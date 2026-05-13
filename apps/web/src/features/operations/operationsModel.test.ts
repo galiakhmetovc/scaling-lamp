@@ -31,6 +31,7 @@ function snapshot(overrides: Partial<WebSnapshot>): WebSnapshot {
     recent_tasks: [],
     recent_tool_calls: [],
     delivery_targets: [],
+    session_output_routes: [],
     telegram_chats: [],
     recent_traces: [],
     ...overrides
@@ -66,7 +67,7 @@ test("summarizeOperations counts active and failed runtime entities", () => {
           updated_at: 2
         }
       ],
-      delivery_targets: [{ target_id: "tg-monitoring", kind: "telegram", scope: "group", format_policy: "summary", updated_at: 2 }],
+      delivery_targets: [{ target_id: "tg-monitoring", kind: "telegram", address: "1", scope: "group", format_policy: "summary", updated_at: 2 }],
       telegram_chats: [{ telegram_chat_id: 1, scope: "group", inbound_queue_mode: "coalesce", updated_at: 2 }]
     })
   );

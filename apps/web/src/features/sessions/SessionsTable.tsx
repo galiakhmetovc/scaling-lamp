@@ -24,6 +24,7 @@ export function SessionsTable({
   limit,
   onFilterChange,
   onSelect,
+  onDelete,
   onPageChange
 }: {
   sessions: SessionSummary[];
@@ -34,6 +35,7 @@ export function SessionsTable({
   limit: number;
   onFilterChange: (value: string) => void;
   onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
   onPageChange: (offset: number) => void;
 }) {
   const normalizedFilter = filter.trim().toLowerCase();
@@ -84,6 +86,7 @@ export function SessionsTable({
               <TableCell>Агент</TableCell>
               <TableCell align="right">Сообщ.</TableCell>
               <TableCell>Обновлена</TableCell>
+              <TableCell align="right">Действия</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -114,11 +117,26 @@ export function SessionsTable({
                 </TableCell>
                 <TableCell align="right">{session.message_count}</TableCell>
                 <TableCell>{formatTime(session.updated_at)}</TableCell>
+                <TableCell align="right">
+                  <Button
+                    size="small"
+                    color="error"
+                    variant="outlined"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (window.confirm(`Удалить сессию "${session.title || session.id}"?`)) {
+                        onDelete(session.id);
+                      }
+                    }}
+                  >
+                    Удалить
+                  </Button>
+                </TableCell>
               </TableRow>
             ))}
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4}>
+                <TableCell colSpan={5}>
                   <EmptyState title="Сессии не найдены" detail="Измени фильтр или создай новую сессию." />
                 </TableCell>
               </TableRow>

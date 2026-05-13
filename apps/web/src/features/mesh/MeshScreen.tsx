@@ -65,8 +65,15 @@ export function MeshScreen({
       </Paper>
 
       <MeshAgentLanes lanes={lanes} onOpenSession={onOpenSession} />
-      <MeshTasksTable tasks={recentTasks} onOpenSession={onOpenSession} />
-      <MeshRoutesPanel eventBus={snapshot.event_bus} targets={snapshot.delivery_targets} chats={snapshot.telegram_chats} />
+      <MeshTasksTable tasks={recentTasks} sessions={snapshot.sessions} agents={snapshot.agents} onOpenSession={onOpenSession} />
+      <MeshRoutesPanel
+        eventBus={snapshot.event_bus}
+        targets={snapshot.delivery_targets}
+        chats={snapshot.telegram_chats}
+        sessions={snapshot.sessions}
+        agents={snapshot.agents}
+        onOpenSession={onOpenSession}
+      />
     </Stack>
   );
 }

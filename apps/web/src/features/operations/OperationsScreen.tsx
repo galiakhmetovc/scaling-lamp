@@ -67,13 +67,29 @@ export function OperationsScreen({
       ) : null}
 
       <SectionHeader title="Active runs" subtitle="Только runs со статусом running/queued/in_progress/active/pending." />
-      <RunsTable runs={activeRuns.length ? activeRuns : snapshot.recent_runs.slice(0, 10)} />
+      <RunsTable
+        runs={activeRuns.length ? activeRuns : snapshot.recent_runs.slice(0, 10)}
+        sessions={snapshot.sessions}
+        onOpenSession={onOpenSession}
+      />
 
       <SectionHeader title="Active tasks" subtitle="Task registry: agent_task/delegate и фоновые задачи, видимые в snapshot." />
-      <MeshTasksTable tasks={activeTasks.length ? activeTasks : snapshot.recent_tasks.slice(0, 10)} onOpenSession={onOpenSession} />
+      <MeshTasksTable
+        tasks={activeTasks.length ? activeTasks : snapshot.recent_tasks.slice(0, 10)}
+        sessions={snapshot.sessions}
+        agents={snapshot.agents}
+        onOpenSession={onOpenSession}
+      />
 
       <SectionHeader title="Routing" subtitle="Fan-out targets и Telegram fan-in bindings." />
-      <MeshRoutesPanel eventBus={snapshot.event_bus} targets={snapshot.delivery_targets} chats={snapshot.telegram_chats} />
+      <MeshRoutesPanel
+        eventBus={snapshot.event_bus}
+        targets={snapshot.delivery_targets}
+        chats={snapshot.telegram_chats}
+        sessions={snapshot.sessions}
+        agents={snapshot.agents}
+        onOpenSession={onOpenSession}
+      />
     </Stack>
   );
 }

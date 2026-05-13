@@ -17,6 +17,18 @@ pub struct DeliveryTargetCreateOptions {
     pub format_policy: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryTargetUpdatePatch {
+    pub kind: Option<String>,
+    pub address: Option<String>,
+    pub scope: Option<String>,
+    pub owner_user_id: Option<Option<String>>,
+    pub allowed_agent_ids: Option<Vec<String>>,
+    pub allowed_session_ids: Option<Vec<String>>,
+    pub send_policy_json: Option<String>,
+    pub format_policy: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveryTargetView {
     pub id: String,
@@ -38,6 +50,13 @@ pub struct SessionOutputRouteCreateOptions {
     pub filter_json: String,
     pub format_policy: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOutputRouteUpdatePatch {
+    pub filter_json: Option<String>,
+    pub format_policy: Option<String>,
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +139,61 @@ impl App {
         delivery_target_view(record)
     }
 
+    pub fn update_delivery_target(
+        &self,
+        target_id: &str,
+        patch: DeliveryTargetUpdatePatch,
+    ) -> Result<DeliveryTargetView, BootstrapError> {
+        validate_non_blank("delivery target id", target_id)?;
+        let store = self.store()?;
+        let mut record =
+            store
+                .get_delivery_target(target_id)?
+                .ok_or_else(|| BootstrapError::MissingRecord {
+                    kind: "delivery target",
+                    id: target_id.to_string(),
+                })?;
+
+        if let Some(kind) = patch.kind {
+            validate_non_blank("delivery target kind", &kind)?;
+            record.kind = kind.trim().to_string();
+        }
+        if let Some(address) = patch.address {
+            validate_non_blank("delivery target address", &address)?;
+            record.address = address.trim().to_string();
+        }
+        if let Some(scope) = patch.scope {
+            validate_non_blank("delivery target scope", &scope)?;
+            record.scope = scope.trim().to_string();
+        }
+        if let Some(owner_user_id) = patch.owner_user_id {
+            record.owner_user_id = owner_user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(allowed_agent_ids) = patch.allowed_agent_ids {
+            record.allowed_agent_ids_json =
+                serde_json::to_string(&allowed_agent_ids).map_err(usage_json_error)?;
+        }
+        if let Some(allowed_session_ids) = patch.allowed_session_ids {
+            record.allowed_session_ids_json =
+                serde_json::to_string(&allowed_session_ids).map_err(usage_json_error)?;
+        }
+        if let Some(send_policy_json) = patch.send_policy_json {
+            validate_json_value("delivery target send_policy_json", &send_policy_json)?;
+            record.send_policy_json = send_policy_json;
+        }
+        if let Some(format_policy) = patch.format_policy {
+            validate_format_policy(&format_policy)?;
+            record.format_policy = format_policy.trim().to_string();
+        }
+        record.updated_at = unix_timestamp()?;
+        store.put_delivery_target(&record)?;
+        self.delivery_target(target_id)
+    }
+
     pub fn list_delivery_targets(&self) -> Result<Vec<DeliveryTargetView>, BootstrapError> {
         let store = self.store()?;
         let mut targets = store
@@ -129,6 +203,24 @@ impl App {
             .collect::<Result<Vec<_>, _>>()?;
         targets.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(targets)
+    }
+
+    pub fn list_session_output_routes(
+        &self,
+    ) -> Result<Vec<SessionOutputRouteView>, BootstrapError> {
+        let store = self.store()?;
+        let mut routes = store
+            .list_session_output_routes()?
+            .into_iter()
+            .map(session_output_route_view)
+            .collect::<Vec<_>>();
+        routes.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(routes)
     }
 
     pub fn attach_session_output_route(
@@ -224,6 +316,35 @@ impl App {
             }
         })?;
         Ok(session_output_route_view(record))
+    }
+
+    pub fn update_session_output_route(
+        &self,
+        route_id: &str,
+        patch: SessionOutputRouteUpdatePatch,
+    ) -> Result<SessionOutputRouteView, BootstrapError> {
+        validate_non_blank("session output route id", route_id)?;
+        let store = self.store()?;
+        let mut record = store.get_session_output_route(route_id)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "session output route",
+                id: route_id.to_string(),
+            }
+        })?;
+        if let Some(filter_json) = patch.filter_json {
+            validate_json_value("session output route filter_json", &filter_json)?;
+            record.filter_json = filter_json;
+        }
+        if let Some(format_policy) = patch.format_policy {
+            validate_format_policy(&format_policy)?;
+            record.format_policy = format_policy.trim().to_string();
+        }
+        if let Some(enabled) = patch.enabled {
+            record.enabled = enabled;
+        }
+        record.updated_at = unix_timestamp()?;
+        store.put_session_output_route(&record)?;
+        self.session_output_route(route_id)
     }
 
     pub fn list_enabled_session_output_routes(
