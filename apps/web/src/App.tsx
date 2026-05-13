@@ -571,7 +571,6 @@ export function App() {
         return (
           <AgentsScreen
             agents={snapshot?.agents ?? []}
-            sessions={sessions}
             loading={loading}
             onCreateAgent={() => setCreateAgentOpen(true)}
             onOpenSession={(sessionId) => {

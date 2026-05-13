@@ -2,26 +2,24 @@ import { Alert, Box, Button, Paper, Stack, Tab, Tabs } from "@mui/material";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { EmptyState, SectionHeader } from "../../components/common";
-import type { AgentDetail, AgentSummary, AgentUpdatePatch, SessionSummary } from "../../types";
+import type { AgentDetail, AgentSummary, AgentUpdatePatch, SessionSummary, ToolCatalogItem } from "../../types";
 import { AgentPromptFilesEditor } from "../skills/AgentPromptFilesEditor";
 import { AgentSkillCardsEditor } from "../skills/AgentSkillCardsEditor";
 import { AgentLinkedSessions } from "./AgentLinkedSessions";
 import { AgentProfileEditor } from "./AgentProfileEditor";
 import { AgentsListPane } from "./AgentsListPane";
-import { sessionsForAgent } from "./agentProfile";
 
 type AgentTab = "profile" | "prompts" | "skills";
+const LINKED_SESSIONS_PAGE_SIZE = 8;
 
 export function AgentsScreen({
   agents,
-  sessions,
   loading,
   onCreateAgent,
   onOpenSession,
   onRefresh
 }: {
   agents: AgentSummary[];
-  sessions: SessionSummary[];
   loading: boolean;
   onCreateAgent: () => void;
   onOpenSession: (sessionId: string) => void;
@@ -34,6 +32,11 @@ export function AgentsScreen({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([]);
+  const [linkedSessions, setLinkedSessions] = useState<SessionSummary[]>([]);
+  const [linkedSessionsOffset, setLinkedSessionsOffset] = useState(0);
+  const [linkedSessionsHasMore, setLinkedSessionsHasMore] = useState(false);
+  const [linkedSessionsLoading, setLinkedSessionsLoading] = useState(false);
 
   async function loadDetail(agentId: string, signal?: AbortSignal) {
     setDetailLoading(true);
@@ -114,7 +117,50 @@ export function AgentsScreen({
     return () => controller.abort();
   }, [selectedAgentId]);
 
-  const linkedSessions = selectedAgentId ? sessionsForAgent(sessions, selectedAgentId) : [];
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .toolCatalog(controller.signal)
+      .then((catalog) => setToolCatalog(catalog.tools))
+      .catch((catalogError) => {
+        if (!controller.signal.aborted) {
+          setError(catalogError instanceof Error ? catalogError.message : String(catalogError));
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    setLinkedSessionsOffset(0);
+  }, [selectedAgentId]);
+
+  useEffect(() => {
+    if (!selectedAgentId) {
+      setLinkedSessions([]);
+      setLinkedSessionsHasMore(false);
+      return;
+    }
+    const controller = new AbortController();
+    setLinkedSessionsLoading(true);
+    api
+      .sessionsForAgent(selectedAgentId, LINKED_SESSIONS_PAGE_SIZE + 1, linkedSessionsOffset, controller.signal)
+      .then((agentSessions) => {
+        const page = agentSessions.slice(0, LINKED_SESSIONS_PAGE_SIZE);
+        setLinkedSessions(page);
+        setLinkedSessionsHasMore(agentSessions.length > LINKED_SESSIONS_PAGE_SIZE);
+      })
+      .catch((sessionsError) => {
+        if (!controller.signal.aborted) {
+          setError(sessionsError instanceof Error ? sessionsError.message : String(sessionsError));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLinkedSessionsLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [linkedSessionsOffset, selectedAgentId]);
 
   return (
     <Stack spacing={2}>
@@ -157,6 +203,7 @@ export function AgentsScreen({
                 <>
                   <AgentProfileEditor
                     agent={detail}
+                    toolCatalog={toolCatalog}
                     saving={saving}
                     error={null}
                     notice={notice}
@@ -166,6 +213,11 @@ export function AgentsScreen({
                   <Paper variant="outlined" sx={{ p: 1.5 }}>
                     <AgentLinkedSessions
                       sessions={linkedSessions}
+                      loading={linkedSessionsLoading}
+                      offset={linkedSessionsOffset}
+                      limit={LINKED_SESSIONS_PAGE_SIZE}
+                      hasMore={linkedSessionsHasMore}
+                      onPageChange={setLinkedSessionsOffset}
                       onOpenSession={(sessionId) => {
                         onOpenSession(sessionId);
                       }}

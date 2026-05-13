@@ -99,6 +99,16 @@ export const api = {
     const query = params.size > 0 ? `?${params.toString()}` : "";
     return requestJson<SessionSummary[]>(endpoint(`/v1/sessions${query}`), { signal });
   },
+  sessionsForAgent(agentProfileId: string, limit?: number, offset?: number, signal?: AbortSignal) {
+    const params = new URLSearchParams({ agent_profile_id: agentProfileId });
+    if (limit) {
+      params.set("limit", String(limit));
+    }
+    if (offset) {
+      params.set("offset", String(offset));
+    }
+    return requestJson<SessionSummary[]>(endpoint(`/v1/sessions?${params.toString()}`), { signal });
+  },
   createSession(title: string, agentIdentifier?: string) {
     return requestJson<SessionSummary>(endpoint("/v1/sessions"), {
       method: "POST",

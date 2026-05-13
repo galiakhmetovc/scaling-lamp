@@ -341,6 +341,52 @@ fn daemon_http_web_snapshot_reads_runtime_data() {
 }
 
 #[test]
+fn daemon_http_sessions_can_filter_by_agent_profile() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    let store = app.store().expect("open store");
+    for (id, agent_profile_id, updated_at) in [
+        ("session-default-old", "default", 20),
+        ("session-judge", "judge", 30),
+        ("session-default-new", "default", 40),
+    ] {
+        store
+            .put_session(&SessionRecord {
+                id: id.to_string(),
+                title: id.to_string(),
+                prompt_override: None,
+                settings_json: "{}".to_string(),
+                workspace_root: app.runtime.workspace.root.display().to_string(),
+                agent_profile_id: agent_profile_id.to_string(),
+                active_mission_id: None,
+                parent_session_id: None,
+                parent_job_id: None,
+                delegation_label: None,
+                created_at: updated_at - 10,
+                updated_at,
+            })
+            .expect("put session");
+    }
+
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+    let response = client
+        .get(format!(
+            "{base_url}/v1/sessions?agent_profile_id=default&limit=1&offset=1"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("sessions response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let sessions: Vec<SessionSummaryResponse> = response.json().expect("sessions json");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "session-default-old");
+    assert_eq!(sessions[0].agent_profile_id, "default");
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
 fn daemon_http_can_create_a_session_over_json() {
     let (_temp, app, base_url) = test_app(Some("secret-token"));
     let handle = daemon::spawn_for_test(app).expect("spawn daemon");

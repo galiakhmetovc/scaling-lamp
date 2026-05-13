@@ -50,6 +50,20 @@ pub trait SessionRepository {
         let sessions = self.list_sessions()?;
         Ok(sessions.into_iter().skip(offset).take(limit).collect())
     }
+    fn list_sessions_for_agent_page(
+        &self,
+        agent_profile_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SessionRecord>, StoreError> {
+        let sessions = self.list_sessions()?;
+        Ok(sessions
+            .into_iter()
+            .filter(|session| session.agent_profile_id == agent_profile_id)
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
     fn delete_session(&self, id: &str) -> Result<bool, StoreError>;
 }
 

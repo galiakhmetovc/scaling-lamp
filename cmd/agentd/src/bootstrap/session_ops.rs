@@ -403,6 +403,50 @@ impl App {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub fn list_session_summaries_for_agent_page(
+        &self,
+        agent_profile_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SessionSummary>, BootstrapError> {
+        let started = Instant::now();
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "list_session_summaries_for_agent_page.start",
+            "listing paginated session summaries for agent",
+        )
+        .field("agent_profile_id", agent_profile_id)
+        .field("limit", limit)
+        .field("offset", offset)
+        .emit(&self.persistence.audit);
+        let store = self.store()?;
+        let records = store.list_sessions_for_agent_page(agent_profile_id, limit, offset)?;
+        let summaries = build_session_summaries_for_records(
+            &store,
+            &self.config,
+            &self.runtime.workspace,
+            records,
+        )?;
+        DiagnosticEventBuilder::new(
+            &self.config,
+            "info",
+            "session_ops",
+            "list_session_summaries_for_agent_page.finish",
+            "listed paginated session summaries for agent",
+        )
+        .elapsed_ms(started.elapsed().as_millis() as u64)
+        .outcome("ok")
+        .field("agent_profile_id", agent_profile_id)
+        .field("count", summaries.len())
+        .field("limit", limit)
+        .field("offset", offset)
+        .emit(&self.persistence.audit);
+        Ok(summaries)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn session_summary(&self, session_id: &str) -> Result<SessionSummary, BootstrapError> {
         let started = Instant::now();
         DiagnosticEventBuilder::new(

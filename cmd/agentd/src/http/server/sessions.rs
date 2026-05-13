@@ -81,9 +81,16 @@ pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io:
 pub(super) fn handle_list_sessions(app: &App, request: Request) -> std::io::Result<()> {
     let limit = query_usize(&request, "limit").map(|value| value.clamp(1, 100));
     let offset = query_usize(&request, "offset").unwrap_or(0);
-    let sessions_result = match limit {
-        Some(limit) => app.list_session_summaries_page(limit, offset),
-        None => app.list_session_summaries(),
+    let agent_profile_id = query_string(&request, "agent_profile_id");
+    let sessions_result = match (agent_profile_id.as_deref(), limit) {
+        (Some(agent_profile_id), Some(limit)) => {
+            app.list_session_summaries_for_agent_page(agent_profile_id, limit, offset)
+        }
+        (Some(agent_profile_id), None) => {
+            app.list_session_summaries_for_agent_page(agent_profile_id, 100, offset)
+        }
+        (None, Some(limit)) => app.list_session_summaries_page(limit, offset),
+        (None, None) => app.list_session_summaries(),
     };
     let sessions = match sessions_result {
         Ok(sessions) => sessions
@@ -107,6 +114,14 @@ fn query_usize(request: &Request, name: &str) -> Option<usize> {
         } else {
             None
         }
+    })
+}
+
+fn query_string(request: &Request, name: &str) -> Option<String> {
+    let query = request.url().split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name && !value.is_empty()).then(|| value.to_string())
     })
 }
 

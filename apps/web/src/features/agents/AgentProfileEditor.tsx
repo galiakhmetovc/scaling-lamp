@@ -1,12 +1,14 @@
 import { Alert, Button, Chip, Paper, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { KeyValueTable } from "../../components/common";
-import type { AgentDetail, AgentUpdatePatch } from "../../types";
+import type { AgentDetail, AgentUpdatePatch, ToolCatalogItem } from "../../types";
 import { formatTime } from "../../utils/format";
-import { formatAllowedTools, parseAllowedToolsText } from "./agentProfile";
+import { AgentAllowedToolsEditor } from "./AgentAllowedToolsEditor";
+import { describeAgentProfileChanges, formatAllowedTools, parseAllowedToolsText } from "./agentProfile";
 
 export function AgentProfileEditor({
   agent,
+  toolCatalog,
   saving,
   error,
   notice,
@@ -14,6 +16,7 @@ export function AgentProfileEditor({
   onDelete
 }: {
   agent: AgentDetail;
+  toolCatalog: ToolCatalogItem[];
   saving: boolean;
   error: string | null;
   notice: string | null;
@@ -35,6 +38,14 @@ export function AgentProfileEditor({
     name.trim() !== agent.name ||
     workspaceRoot.trim() !== (agent.default_workspace_root ?? "") ||
     formatAllowedTools(parsedTools) !== formatAllowedTools(agent.allowed_tools);
+  const changes = describeAgentProfileChanges({
+    currentName: agent.name,
+    nextName: name,
+    currentWorkspaceRoot: agent.default_workspace_root,
+    nextWorkspaceRoot: workspaceRoot,
+    currentAllowedTools: agent.allowed_tools,
+    nextAllowedTools: parsedTools
+  });
 
   return (
     <Stack spacing={1.5}>
@@ -77,15 +88,21 @@ export function AgentProfileEditor({
             helperText="Пустое значение отключит default workspace root. Путь валидируется backend."
             inputProps={{ className: "mono" }}
           />
-          <TextField
-            fullWidth
-            multiline
-            minRows={10}
-            label="Allowed tools"
-            value={allowedToolsText}
-            onChange={(event) => setAllowedToolsText(event.target.value)}
-            helperText="Один tool id на строку. Пустые строки и дубли будут убраны."
-            inputProps={{ className: "mono" }}
+          {changes.length > 0 ? (
+            <Alert severity="warning">
+              <Typography fontWeight={700}>Будут сохранены изменения</Typography>
+              <ul className="compact-list">
+                {changes.map((change) => (
+                  <li key={change}>{change}</li>
+                ))}
+              </ul>
+            </Alert>
+          ) : null}
+          <AgentAllowedToolsEditor
+            allowedTools={parsedTools}
+            allowedToolsText={allowedToolsText}
+            toolCatalog={toolCatalog}
+            onChange={setAllowedToolsText}
           />
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Button

@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatAllowedTools, parseAllowedToolsText, sessionsForAgent } from "./agentProfile.ts";
+import {
+  describeAgentProfileChanges,
+  formatAllowedTools,
+  parseAllowedToolsText,
+  sessionsForAgent,
+  toggleAllowedTool
+} from "./agentProfile.ts";
 import type { SessionSummary } from "../../types.ts";
 
 function session(id: string, agentProfileId: string, updatedAt: number): SessionSummary {
@@ -41,5 +47,28 @@ test("sessionsForAgent returns matching sessions newest first", () => {
   assert.deepEqual(
     sessionsForAgent(sessions, "default").map((item) => item.id),
     ["new", "old"]
+  );
+});
+
+test("toggleAllowedTool adds sorted tools and removes existing tools", () => {
+  assert.deepEqual(toggleAllowedTool(["web_search", "fs_read_text"], "exec_start"), [
+    "exec_start",
+    "fs_read_text",
+    "web_search"
+  ]);
+  assert.deepEqual(toggleAllowedTool(["exec_start", "fs_read_text"], "exec_start"), ["fs_read_text"]);
+});
+
+test("describeAgentProfileChanges summarizes profile diffs", () => {
+  assert.deepEqual(
+    describeAgentProfileChanges({
+      currentName: "Default",
+      nextName: "Default 2",
+      currentWorkspaceRoot: "/old",
+      nextWorkspaceRoot: "/new",
+      currentAllowedTools: ["fs_read_text", "web_search"],
+      nextAllowedTools: ["fs_read_text", "exec_start"]
+    }),
+    ["name: Default -> Default 2", "default_workspace_root: /old -> /new", "allowed_tools: +1 / -1"]
   );
 });

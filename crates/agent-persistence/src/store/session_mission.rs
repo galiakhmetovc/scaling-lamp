@@ -100,6 +100,30 @@ impl SessionRepository for PersistenceStore {
         })
     }
 
+    fn list_sessions_for_agent_page(
+        &self,
+        agent_profile_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SessionRecord>, StoreError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT id, title, prompt_override, settings_json, workspace_root, agent_profile_id, active_mission_id,
+                            parent_session_id, parent_job_id, delegation_label, created_at, updated_at
+                     FROM sessions
+                     WHERE agent_profile_id = $1
+                     ORDER BY updated_at DESC, created_at DESC, id ASC
+                     LIMIT $2 OFFSET $3",
+                    &[&agent_profile_id, &limit, &offset],
+                )
+                .map(|rows| rows.iter().map(session_record_from_row).collect())
+                .map_err(StoreError::from)
+        })
+    }
+
     fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
         let transcript_paths = self.session_transcript_payload_paths(id)?;
         let artifact_paths = self.session_artifact_payload_paths(id)?;

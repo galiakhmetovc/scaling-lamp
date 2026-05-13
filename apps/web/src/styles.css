@@ -57,6 +57,11 @@ body {
   align-items: start;
 }
 
+.compact-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
 .chat-layout {
   display: grid;
   grid-template-columns: 44px minmax(560px, 1fr) 44px;
