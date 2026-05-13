@@ -46,7 +46,7 @@ function childNameForCreate(basePath: string, value: string): string {
   return trimmed.includes("/") ? trimmed : joinWorkspacePath(basePath, trimmed);
 }
 
-export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
+export function WorkspaceFilesPane({ sessionId, compact = false }: { sessionId: string; compact?: boolean }) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set([""]));
   const [directories, setDirectories] = useState<DirectoryStateMap>({});
   const [selectedPath, setSelectedPath] = useState("");
@@ -316,7 +316,7 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
     <Stack spacing={1.5}>
       {error ? <Alert severity="error">{error}</Alert> : null}
 
-      <Box className="workspace-browser">
+      <Box className={`workspace-browser ${compact ? "workspace-browser-compact" : ""}`}>
         <Paper variant="outlined" className="workspace-tree-panel">
           <Stack spacing={1.25}>
             <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">

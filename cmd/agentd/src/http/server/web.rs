@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const WEB_SESSION_LIMIT: usize = 25;
 const WEB_RUN_SESSION_LIMIT: usize = 3;
 const WEB_RUN_LIMIT: usize = 30;
-const WEB_TOOL_CALL_SESSION_LIMIT: usize = 8;
-const WEB_TOOL_CALL_LIMIT: usize = 40;
+const WEB_TOOL_CALL_SESSION_LIMIT: usize = 60;
+const WEB_TOOL_CALL_LIMIT: usize = 120;
 const WEB_TRACE_LIMIT: usize = 30;
 
 pub(super) fn is_web_console_request(request: &Request) -> bool {

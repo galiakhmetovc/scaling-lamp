@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Stack } from "@mui/material";
 import { api } from "./api";
 import { ConsoleShell } from "./components/ConsoleShell";
@@ -21,6 +21,7 @@ import type {
   PendingApproval,
   PendingChatMessage,
   SessionDebug,
+  SessionPreferencesPatch,
   SessionSummary,
   SessionTask,
   SessionTranscript,
@@ -54,6 +55,7 @@ export function App() {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [liveConnected, setLiveConnected] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("Новая web-сессия");
@@ -61,10 +63,22 @@ export function App() {
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const [newAgentName, setNewAgentName] = useState("");
   const [newAgentTemplate, setNewAgentTemplate] = useState("default");
+  const selectedSessionIdRef = useRef<string | null>(null);
+  const sessionsOffsetRef = useRef(0);
 
-  async function loadData(signal?: AbortSignal, offset = sessionsOffset, preferredSessionId?: string) {
-    setLoading(true);
-    setError(null);
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    sessionsOffsetRef.current = sessionsOffset;
+  }, [sessionsOffset]);
+
+  async function loadData(signal?: AbortSignal, offset = sessionsOffset, preferredSessionId?: string, quiet = false) {
+    if (!quiet) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [nextSnapshot, nextSessions] = await Promise.all([
         api.snapshot(signal),
@@ -86,7 +100,7 @@ export function App() {
         setError(loadError instanceof Error ? loadError.message : String(loadError));
       }
     } finally {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && !quiet) {
         setLoading(false);
       }
     }
@@ -124,12 +138,48 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController();
     void loadData(controller.signal, sessionsOffset);
-    const timer = window.setInterval(() => void loadData(controller.signal, sessionsOffset), 10_000);
     return () => {
       controller.abort();
-      window.clearInterval(timer);
     };
   }, [sessionsOffset]);
+
+  useEffect(() => {
+    const source = new EventSource(api.eventsUrl());
+    source.addEventListener("open", () => setLiveConnected(true));
+    source.addEventListener("snapshot", (event) => {
+      const nextSnapshot = JSON.parse((event as MessageEvent).data) as WebSnapshot;
+      setLiveConnected(true);
+      setSnapshot(nextSnapshot);
+      if (sessionsOffsetRef.current === 0) {
+        setSessions(nextSnapshot.sessions);
+      } else {
+        void api.sessions(SESSION_PAGE_SIZE, sessionsOffsetRef.current).then(setSessions).catch(() => undefined);
+      }
+      setSelectedSessionId((current) => current ?? nextSnapshot.sessions[0]?.id ?? null);
+      const activeSessionId = selectedSessionIdRef.current;
+      if (activeSessionId) {
+        void loadSessionDetails(activeSessionId, undefined, true);
+      }
+    });
+    source.addEventListener("error", () => setLiveConnected(false));
+    return () => {
+      source.close();
+      setLiveConnected(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (liveConnected) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadData(undefined, sessionsOffset, selectedSessionIdRef.current ?? undefined, true);
+      if (selectedSessionIdRef.current) {
+        void loadSessionDetails(selectedSessionIdRef.current, undefined, true);
+      }
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [liveConnected, sessionsOffset]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -346,6 +396,22 @@ export function App() {
     }
   }
 
+  async function updateSelectedSessionPreferences(patch: SessionPreferencesPatch) {
+    if (!selectedSessionId) {
+      setNotice("Сессия не выбрана.");
+      return;
+    }
+    try {
+      const summary = await api.updateSessionPreferences(selectedSessionId, patch);
+      setNotice("Настройки сессии обновлены.");
+      setSelectedSessionId(summary.id);
+      await loadData(undefined, sessionsOffset, summary.id, true);
+      await loadSessionDetails(summary.id, undefined, true);
+    } catch (updateError) {
+      setNotice(updateError instanceof Error ? updateError.message : String(updateError));
+    }
+  }
+
   async function submitCreateSession() {
     const title = newSessionTitle.trim() || "Новая web-сессия";
     try {
@@ -446,6 +512,7 @@ export function App() {
             detailError={detailError}
             sending={sending}
             approving={approving}
+            liveConnected={liveConnected}
             onRefresh={refreshSelectedSession}
             onCreateSession={() => setCreateSessionOpen(true)}
             onSelectSession={setSelectedSessionId}
@@ -455,6 +522,7 @@ export function App() {
             onSend={() => void submitMessage()}
             onCommand={(command, rawInput) => void runChatCommand(command, rawInput)}
             onApprove={(approvalId) => void approveLatest(approvalId)}
+            onUpdateSessionPreferences={(patch) => void updateSelectedSessionPreferences(patch)}
             onCancelRun={() => void cancelRun(false)}
             onCancelAll={() => void cancelRun(true)}
           />

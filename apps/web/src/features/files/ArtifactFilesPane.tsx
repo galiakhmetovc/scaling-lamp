@@ -9,8 +9,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TableRow,
-  Typography
+  TableRow
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
@@ -19,7 +18,7 @@ import type { ArtifactFile, ArtifactFileSummary } from "../../types";
 import { formatTime } from "../../utils/format";
 import { FilePreview } from "./FilePreview";
 
-export function ArtifactFilesPane({ sessionId }: { sessionId: string }) {
+export function ArtifactFilesPane({ sessionId, compact = false }: { sessionId: string; compact?: boolean }) {
   const [artifacts, setArtifacts] = useState<ArtifactFileSummary[]>([]);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactFile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -73,7 +72,7 @@ export function ArtifactFilesPane({ sessionId }: { sessionId: string }) {
       {error ? <Alert severity="error">{error}</Alert> : null}
 
       <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
+        <Table size="small" stickyHeader={compact}>
           <TableHead>
             <TableRow>
               <TableCell>ID</TableCell>
@@ -126,9 +125,14 @@ export function ArtifactFilesPane({ sessionId }: { sessionId: string }) {
             truncated={selectedArtifact.content_truncated}
             onDownload={() => download(selectedArtifact.id)}
           />
-          <Typography component="pre" className="file-preview">
-            {selectedArtifact.metadata_json || "{}"}
-          </Typography>
+          <FilePreview
+            title="metadata.json"
+            subtitle={selectedArtifact.id}
+            bytes={selectedArtifact.metadata_json.length}
+            content={selectedArtifact.metadata_json || "{}"}
+            text
+            truncated={false}
+          />
         </Stack>
       ) : null}
     </Stack>

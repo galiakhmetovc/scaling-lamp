@@ -1,9 +1,28 @@
-import { Button, Chip, Paper, Stack, Typography } from "@mui/material";
+import { useEffect, useState } from "react";
+import {
+  Button,
+  Chip,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  IconButton,
+  MenuItem,
+  Pagination,
+  Paper,
+  Stack,
+  Switch,
+  TextField,
+  Typography
+} from "@mui/material";
 import { KeyValueTable, StatusChip } from "../../components/common";
-import type { DebugEntry, PendingApproval, SessionSummary, SessionTask, ToolCallSummary } from "../../types";
+import type { DebugEntry, PendingApproval, SessionPreferencesPatch, SessionSummary, SessionTask, ToolCallSummary } from "../../types";
 import { formatTime } from "../../utils/format";
 import { ToolDetailPanel } from "./ToolDetailPanel";
 import { buildToolStats } from "./toolStats";
+
+const TOOL_PAGE_SIZE = 8;
+const THINK_LEVELS = ["default", "off", "low", "medium", "high"];
 
 export function ChatStatusPanel({
   selectedSession,
@@ -12,8 +31,10 @@ export function ChatStatusPanel({
   pendingApprovals,
   selectedToolId,
   toolDetails,
+  debugEntries = [],
   onSelectTool,
   onClearTool,
+  onUpdateSessionPreferences,
   onCancelRun,
   onCancelAll
 }: {
@@ -23,16 +44,30 @@ export function ChatStatusPanel({
   pendingApprovals: PendingApproval[];
   selectedToolId: string | null;
   toolDetails: DebugEntry | null;
+  debugEntries?: DebugEntry[];
   onSelectTool: (toolId: string) => void;
   onClearTool: () => void;
+  onUpdateSessionPreferences: (patch: SessionPreferencesPatch) => void;
   onCancelRun: () => void;
   onCancelAll: () => void;
 }) {
+  const [toolsPage, setToolsPage] = useState(1);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [modelDraft, setModelDraft] = useState("");
   const activeTasks = tasks.filter((task) => ["queued", "running", "in_progress"].includes(task.status));
   const selectedSessionTools = selectedSession ? tools.filter((tool) => tool.session_id === selectedSession.id) : [];
   const selectedSessionToolErrors = selectedSessionTools.filter((tool) => tool.status !== "completed" || tool.error);
   const stats = buildToolStats(selectedSessionTools);
   const selectedTool = selectedToolId ? selectedSessionTools.find((tool) => tool.id === selectedToolId) ?? null : null;
+  const pageCount = Math.max(1, Math.ceil(selectedSessionTools.length / TOOL_PAGE_SIZE));
+  const currentPage = Math.min(toolsPage, pageCount);
+  const visibleTools = selectedSessionTools.slice((currentPage - 1) * TOOL_PAGE_SIZE, currentPage * TOOL_PAGE_SIZE);
+
+  useEffect(() => {
+    setToolsPage(1);
+    setTitleDraft(selectedSession?.title ?? "");
+    setModelDraft(selectedSession?.model ?? "");
+  }, [selectedSession?.id, selectedSession?.model, selectedSession?.title]);
 
   return (
     <Stack spacing={1.25}>
@@ -73,6 +108,63 @@ export function ChatStatusPanel({
                 ["Обновлена", formatTime(selectedSession.updated_at)]
               ]}
             />
+            <Stack spacing={1}>
+              <TextField
+                size="small"
+                label="Название"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!titleDraft.trim() || titleDraft.trim() === selectedSession.title}
+                onClick={() => onUpdateSessionPreferences({ title: titleDraft.trim() })}
+              >
+                Переименовать
+              </Button>
+              <TextField
+                size="small"
+                label="Модель"
+                value={modelDraft}
+                onChange={(event) => setModelDraft(event.target.value)}
+                placeholder="default или имя модели"
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={(modelDraft.trim() || "") === (selectedSession.model ?? "")}
+                onClick={() => onUpdateSessionPreferences({ model: modelDraft.trim() || null })}
+              >
+                Сменить модель
+              </Button>
+              <TextField
+                select
+                size="small"
+                label="Think level"
+                value={selectedSession.think_level ?? "default"}
+                onChange={(event) =>
+                  onUpdateSessionPreferences({
+                    think_level: event.target.value === "default" ? null : event.target.value
+                  })
+                }
+              >
+                {THINK_LEVELS.map((level) => (
+                  <MenuItem key={level} value={level}>
+                    {level}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={selectedSession.auto_approve}
+                    onChange={(event) => onUpdateSessionPreferences({ auto_approve: event.target.checked })}
+                  />
+                }
+                label="Auto-approve"
+              />
+            </Stack>
             <Stack direction="row" spacing={1}>
               <Button color="warning" variant="outlined" onClick={onCancelRun}>
                 Stop run
@@ -99,7 +191,7 @@ export function ChatStatusPanel({
           </Typography>
         ) : (
           <Stack spacing={1}>
-            {selectedSessionTools.slice(0, 10).map((tool) => (
+            {visibleTools.map((tool) => (
               <button
                 key={tool.id}
                 className={`chat-tool-row ${tool.id === selectedToolId ? "is-selected" : ""}`}
@@ -117,13 +209,39 @@ export function ChatStatusPanel({
                 </Typography>
               </button>
             ))}
+            {selectedSessionTools.length > TOOL_PAGE_SIZE ? (
+              <Pagination
+                size="small"
+                count={pageCount}
+                page={currentPage}
+                onChange={(_, page) => setToolsPage(page)}
+              />
+            ) : null}
           </Stack>
         )}
       </Paper>
 
-      {selectedTool ? (
-        <ToolDetailPanel tool={selectedTool} toolDetails={toolDetails} onClearTool={onClearTool} />
-      ) : null}
+      <Dialog open={Boolean(selectedTool)} onClose={onClearTool} fullWidth maxWidth="lg">
+        <DialogTitle>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+            <Typography fontWeight={700}>Детали tool call</Typography>
+            <IconButton aria-label="Закрыть" onClick={onClearTool}>
+              ×
+            </IconButton>
+          </Stack>
+        </DialogTitle>
+        <DialogContent dividers>
+          {selectedTool ? (
+            <ToolDetailPanel
+              tool={selectedTool}
+              toolDetails={toolDetails}
+              allTools={selectedSessionTools}
+              debugEntries={debugEntries}
+              onClearTool={onClearTool}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </Stack>
   );
 }

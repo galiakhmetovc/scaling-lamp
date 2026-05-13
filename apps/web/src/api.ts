@@ -58,6 +58,9 @@ function queryString(params: Record<string, string | number | boolean | null | u
 }
 
 export const api = {
+  eventsUrl() {
+    return "/api/events";
+  },
   snapshot(signal?: AbortSignal) {
     return requestJson<WebSnapshot>(endpoint("/v1/web/snapshot"), { signal });
   },

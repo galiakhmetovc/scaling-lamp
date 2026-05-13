@@ -94,6 +94,7 @@ Caddy должен проксировать:
 
 ```text
 /web/ -> teamd-web upstream
+/api/events -> teamd-web upstream
 /api/agentd/* -> teamd-web upstream
 /v1/web/* -> agentd upstream
 ```
@@ -107,6 +108,7 @@ Caddy должен проксировать:
 - `TEAMD_AGENTD_BASE_URL` — URL демона, по умолчанию `http://127.0.0.1:5140`;
 - `TEAMD_AGENTD_TOKEN` — bearer token для `agentd`, если включена авторизация;
 - `TEAMD_AGENTD_TIMEOUT_MS` — timeout proxy-запросов, по умолчанию `120000`.
+- `TEAMD_WEB_SSE_POLL_MS` — частота server-side polling `agentd` для SSE invalidation stream, по умолчанию `2000`.
 - `TEAMD_WEB_AUTH_USER` и `TEAMD_WEB_AUTH_PASSWORD` — включают HTTP Basic Auth для всего web console, включая `/web/` и `/api/agentd/*`;
 - `TEAMD_WEB_AUTH_REALM` — optional realm для Basic Auth prompt, по умолчанию `teamD Web Console`.
 
@@ -120,7 +122,11 @@ Caddy должен проксировать:
 - Node static server + reverse proxy к `agentd`;
 - обзор runtime;
 - отдельный экран `Чат` для основной работы с выбранной сессией;
+- live-обновление чата через SSE endpoint `/api/events`; ручная синхронизация остаётся fallback-командой;
 - в `Чате` боковые панели `Сессии` и `Статус` по умолчанию свернуты в узкие рейлы, чтобы основной режим был именно chat-only;
+- правая панель `Статус` позволяет менять title, model, think level и auto-approve выбранной сессии без выхода из чата;
+- последние tool calls в чате пагинируются, а детали открываются в modal с arguments, result metadata, preview и форматированным exec output;
+- файлы сессии доступны прямо из чата как modal workspace: `Workspace`, `Artifacts`, `Agent home`;
 - composer поддерживает command mode через `/`: web-команды открывают сессии, статус, refresh, stop/cancel или создают новую сессию без второго runtime path;
 - нормальное отображение Markdown-ответов агента: GFM, таблицы, списки, ссылки, inline code и code blocks;
 - список сессий грузится страницами через `limit/offset`, а не целиком;

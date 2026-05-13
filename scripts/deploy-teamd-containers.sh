@@ -2107,6 +2107,10 @@ files.$CADDY_DOMAIN {
     reverse_proxy $CADDY_WEB_UPSTREAM
   }
 
+  handle /api/events {
+    reverse_proxy $CADDY_WEB_UPSTREAM
+  }
+
   handle /v1/web/* {
     reverse_proxy $CADDY_DAEMON_UPSTREAM
   }"

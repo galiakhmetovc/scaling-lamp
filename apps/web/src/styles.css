@@ -537,6 +537,19 @@ body {
   align-items: start;
 }
 
+.chat-files-dialog {
+  min-height: min(74vh, 840px);
+}
+
+.workspace-browser.workspace-browser-compact {
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+}
+
+.file-preview-markdown {
+  font-family: inherit;
+  white-space: normal;
+}
+
 .workspace-tree-panel {
   position: sticky;
   top: 68px;

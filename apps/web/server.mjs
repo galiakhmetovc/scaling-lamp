@@ -11,6 +11,7 @@ const host = process.env.HOST ?? process.env.TEAMD_WEB_HOST ?? "0.0.0.0";
 const agentdBase = new URL(process.env.TEAMD_AGENTD_BASE_URL ?? "http://127.0.0.1:5140");
 const agentdToken = process.env.TEAMD_AGENTD_TOKEN;
 const agentdTimeoutMs = Number.parseInt(process.env.TEAMD_AGENTD_TIMEOUT_MS ?? "120000", 10);
+const ssePollMs = Number.parseInt(process.env.TEAMD_WEB_SSE_POLL_MS ?? "2000", 10);
 const webAuth = buildAuthConfig(process.env);
 
 const mimeByExt = new Map([
@@ -190,12 +191,123 @@ async function proxyAgentd(req, res, url) {
   }
 }
 
+function agentdHeaders(accept = "application/json") {
+  const headers = { accept };
+  if (agentdToken) {
+    headers.authorization = `Bearer ${agentdToken}`;
+  }
+  return headers;
+}
+
+async function fetchAgentdJson(path) {
+  const target = new URL(path, agentdBase);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), agentdTimeoutMs);
+  try {
+    const response = await fetch(target, {
+      method: "GET",
+      headers: agentdHeaders(),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      throw new Error(payload?.error ?? payload?.detail ?? response.statusText);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function snapshotMarker(snapshot) {
+  return JSON.stringify({
+    status: {
+      sessions: snapshot?.status?.session_count,
+      runs: snapshot?.status?.run_count,
+      jobs: snapshot?.status?.job_count,
+      components: snapshot?.status?.components
+    },
+    sessions: (snapshot?.sessions ?? []).map((session) => [
+      session.id,
+      session.updated_at,
+      session.message_count,
+      session.context_tokens,
+      session.has_pending_approval
+    ]),
+    runs: (snapshot?.recent_runs ?? []).map((run) => [run.id, run.status, run.updated_at, run.finished_at]),
+    tools: (snapshot?.recent_tool_calls ?? []).map((tool) => [
+      tool.id,
+      tool.status,
+      tool.updated_at,
+      tool.result_summary,
+      tool.error
+    ]),
+    traces: (snapshot?.recent_traces ?? []).map((trace) => [trace.trace_id, trace.span_id, trace.created_at])
+  });
+}
+
+function writeSse(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+async function streamEvents(req, res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no"
+  });
+  res.write(": connected\n\n");
+
+  let closed = false;
+  let lastMarker = "";
+  req.on("close", () => {
+    closed = true;
+  });
+
+  async function pushSnapshot() {
+    if (closed) {
+      return;
+    }
+    try {
+      const snapshot = await fetchAgentdJson("/v1/web/snapshot");
+      const marker = snapshotMarker(snapshot);
+      if (marker !== lastMarker) {
+        lastMarker = marker;
+        writeSse(res, "snapshot", snapshot);
+      } else {
+        res.write(": heartbeat\n\n");
+      }
+    } catch (error) {
+      writeSse(res, "error", {
+        error: "agentd snapshot stream failed",
+        detail: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  await pushSnapshot();
+  const timer = setInterval(() => {
+    void pushSnapshot();
+    if (closed) {
+      clearInterval(timer);
+      res.end();
+    }
+  }, Math.max(500, ssePollMs));
+}
+
 export function createWebServer(auth = webAuth) {
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     try {
       if (!isAuthorizedRequest(req, auth)) {
         sendUnauthorized(res, auth);
+        return;
+      }
+      if (url.pathname === "/api/events") {
+        await streamEvents(req, res);
         return;
       }
       if (url.pathname.startsWith("/api/agentd/")) {

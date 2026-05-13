@@ -6,6 +6,7 @@ import type {
   PendingApproval,
   PendingChatMessage,
   SessionDebug,
+  SessionPreferencesPatch,
   SessionSummary,
   SessionTask,
   SessionTranscript,
@@ -18,6 +19,7 @@ import { ChatMessageToolStats } from "./ChatMessageToolStats";
 import { ChatStatusPanel } from "./ChatStatusPanel";
 import { ChatWorkStatus } from "./ChatWorkStatus";
 import { chatCommands, filterChatCommands, type ChatCommand } from "./chatCommands";
+import { SessionFilesDialog } from "./SessionFilesDialog";
 import { buildToolStats, isLowSignalChatLine } from "./toolStats";
 
 type VisibleMessage = TranscriptLine & {
@@ -47,6 +49,7 @@ export function ChatScreen({
   detailError,
   sending,
   approving,
+  liveConnected,
   onRefresh,
   onCreateSession,
   onSelectSession,
@@ -56,6 +59,7 @@ export function ChatScreen({
   onSend,
   onCommand,
   onApprove,
+  onUpdateSessionPreferences,
   onCancelRun,
   onCancelAll
 }: {
@@ -79,6 +83,7 @@ export function ChatScreen({
   detailError: string | null;
   sending: boolean;
   approving: boolean;
+  liveConnected: boolean;
   onRefresh: () => void;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
@@ -88,11 +93,13 @@ export function ChatScreen({
   onSend: () => void;
   onCommand: (command: ChatCommand, rawInput: string) => void;
   onApprove: (approvalId?: string) => void;
+  onUpdateSessionPreferences: (patch: SessionPreferencesPatch) => void;
   onCancelRun: () => void;
   onCancelAll: () => void;
 }) {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const visibleMessages = useMemo<VisibleMessage[]>(() => {
@@ -150,6 +157,10 @@ export function ChatScreen({
         onMessageChange("");
         setStatusOpen(true);
         break;
+      case "open-files":
+        onMessageChange("");
+        setFilesOpen(true);
+        break;
       case "model":
       case "think":
       case "rename":
@@ -164,6 +175,7 @@ export function ChatScreen({
       case "compact":
       case "open-tasks":
       case "open-tools":
+      case "open-skills":
       case "open-debug":
       case "open-agents":
       case "open-routes":
@@ -243,8 +255,16 @@ export function ChatScreen({
                 </Typography>
               </Box>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
-                <Button variant="outlined" onClick={onRefresh} disabled={loading}>
-                  Обновить
+                <Chip
+                  label={liveConnected ? "live: SSE" : "live: fallback poll"}
+                  color={liveConnected ? "success" : "warning"}
+                  variant="outlined"
+                />
+                <Button variant="outlined" onClick={() => setFilesOpen(true)}>
+                  Файлы
+                </Button>
+                <Button variant="text" onClick={onRefresh} disabled={loading}>
+                  Синхр.
                 </Button>
                 <Button variant="contained" onClick={onCreateSession}>
                   Новая сессия
@@ -368,8 +388,10 @@ export function ChatScreen({
               pendingApprovals={pendingApprovals}
               selectedToolId={selectedToolId}
               toolDetails={selectedToolDetails}
+              debugEntries={debug?.entries ?? []}
               onSelectTool={setSelectedToolId}
               onClearTool={() => setSelectedToolId(null)}
+              onUpdateSessionPreferences={onUpdateSessionPreferences}
               onCancelRun={onCancelRun}
               onCancelAll={onCancelAll}
             />
@@ -380,6 +402,7 @@ export function ChatScreen({
           </button>
         )}
       </Box>
+      <SessionFilesDialog open={filesOpen} selectedSession={selectedSession} onClose={() => setFilesOpen(false)} />
     </Box>
   );
 }
