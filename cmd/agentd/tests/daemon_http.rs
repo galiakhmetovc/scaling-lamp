@@ -299,11 +299,14 @@ fn daemon_http_web_snapshot_reads_runtime_data() {
             run_id: "run-web-new".to_string(),
             provider_tool_call_id: "call_web_new".to_string(),
             tool_name: "web_fetch".to_string(),
-            arguments_json: "{\"url\":\"https://example.com\"}".to_string(),
-            summary: "web_fetch url=https://example.com".to_string(),
+            arguments_json:
+                "{\"url\":\"https://example.com\",\"api_key\":\"zai-secret-token\"}".to_string(),
+            summary:
+                "web_fetch url=https://user:SW86Awtsx7CW@example.com Authorization: Bearer zai-secret-token"
+                    .to_string(),
             status: "completed".to_string(),
-            error: None,
-            result_summary: Some("status=200".to_string()),
+            error: Some("provider rejected password=SW86Awtsx7CW".to_string()),
+            result_summary: Some("status=200 token=zai-secret-token".to_string()),
             result_preview: Some("Example Domain".to_string()),
             result_artifact_id: None,
             result_truncated: false,
@@ -327,6 +330,11 @@ fn daemon_http_web_snapshot_reads_runtime_data() {
     assert_eq!(snapshot["sessions"][0]["id"], "session-web-new");
     assert_eq!(snapshot["recent_runs"][0]["id"], "run-web-new");
     assert_eq!(snapshot["recent_tool_calls"][0]["tool_name"], "web_fetch");
+    let rendered_tool_calls =
+        serde_json::to_string(&snapshot["recent_tool_calls"]).expect("tool calls json");
+    assert!(!rendered_tool_calls.contains("SW86Awtsx7CW"));
+    assert!(!rendered_tool_calls.contains("zai-secret-token"));
+    assert!(rendered_tool_calls.contains("<redacted>"));
     assert_eq!(snapshot["event_bus"]["backend"], "nats_jetstream");
 
     handle.stop().expect("stop daemon");

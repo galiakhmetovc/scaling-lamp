@@ -5,6 +5,7 @@ use crate::http::types::{
     WebRunResponse, WebRuntimeStatusResponse, WebSnapshotResponse, WebTelegramChatResponse,
     WebToolCallResponse, WebTraceResponse,
 };
+use crate::redaction::{redact_sensitive_option, redact_sensitive_text};
 use agent_persistence::{
     AgentRepository, DeliveryRepository, RunRepository, TelegramRepository, ToolCallRepository,
     TraceRepository,
@@ -209,9 +210,9 @@ impl From<agent_persistence::ToolCallRecord> for WebToolCallResponse {
             run_id: value.run_id,
             tool_name: value.tool_name,
             status: value.status,
-            summary: value.summary,
-            error: value.error,
-            result_summary: value.result_summary,
+            summary: redact_sensitive_text(value.summary.as_str()),
+            error: redact_sensitive_option(value.error),
+            result_summary: redact_sensitive_option(value.result_summary),
             result_artifact_id: value.result_artifact_id,
             requested_at: value.requested_at,
             updated_at: value.updated_at,
