@@ -350,14 +350,15 @@ export function ChatScreen({
                 onChange={(event) => onMessageChange(event.target.value)}
                 placeholder="Введите задачу, вопрос или / для команд..."
                 onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
                     submitComposer();
                   }
                 }}
               />
               <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 1 }}>
                 <Typography variant="caption" color="text.secondary">
-                  Ctrl/⌘ + Enter — отправить · / — команды
+                  Enter — отправить · Shift + Enter — новая строка · / — команды
                 </Typography>
                 <Button variant="contained" onClick={submitComposer} disabled={sending || !message.trim()}>
                   {sending ? "Отправка..." : "Отправить"}
