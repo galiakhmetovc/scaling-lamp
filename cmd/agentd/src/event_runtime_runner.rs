@@ -349,6 +349,10 @@ async fn telegram_webhook_consumer_loop(
         .map_err(|error| error.to_string())?;
 
     while !shutdown.load(Ordering::Relaxed) {
+        if let Err(error) = worker.refresh_active_chat_statuses().await {
+            log_event_runtime_error(&app, "telegram.status_refresh.error", &error.to_string());
+        }
+
         let next = tokio::time::timeout(CONSUMER_IDLE_TIMEOUT, messages.next()).await;
         let Some(message) = next.ok().flatten() else {
             continue;
@@ -426,6 +430,11 @@ where
             }
         }
     } else {
+        if let Err(error) =
+            start_telegram_status_for_inbound(worker, store.clone(), &inbound.payload_json).await
+        {
+            log_event_runtime_error(app, "telegram.status_start.error", &error);
+        }
         let app = app.clone();
         tokio::task::spawn_blocking(move || {
             route_input_event_envelope(&app, envelope, unix_timestamp()).map(|_| ())
@@ -433,6 +442,38 @@ where
         .await
         .map_err(|error| error.to_string())?
     }
+}
+
+async fn start_telegram_status_for_inbound<B>(
+    worker: &TelegramWorker<B>,
+    store: Arc<PersistenceStore>,
+    payload_json: &str,
+) -> Result<(), String>
+where
+    B: crate::telegram::backend::TelegramBackend,
+{
+    let payload: Value = serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
+    let Some(chat_id) = payload.get("chat_id").and_then(Value::as_i64) else {
+        return Ok(());
+    };
+    let Some(telegram_user_id) = payload.get("telegram_user_id").and_then(Value::as_i64) else {
+        return Ok(());
+    };
+    let Some(pairing) = with_store(store, move |store| {
+        store.get_telegram_user_pairing_by_user_id(telegram_user_id)
+    })
+    .await?
+    else {
+        return Ok(());
+    };
+    if pairing.status != "activated" {
+        return Ok(());
+    }
+    worker
+        .send_temporary_status_message(chat_id, unix_timestamp())
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn session_input_consumer_loop(

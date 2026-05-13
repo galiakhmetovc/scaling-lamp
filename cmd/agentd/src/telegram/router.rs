@@ -39,17 +39,17 @@ use crate::bootstrap::{
     SessionSummary,
 };
 use crate::diagnostics::DiagnosticEventBuilder;
-use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport};
+use crate::execution::{ChatExecutionEvent, ChatTurnExecutionReport, ToolExecutionStatus};
 use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
     ArtifactRecord, ArtifactRepository, DeliveryRepository, FileDeliveryRepository,
-    FileDeliveryRequestRecord, PersistenceStore, SessionInboxRepository, SessionOutputRouteRecord,
-    StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord, TelegramRepository,
-    TelegramUpdateCursorRecord, TelegramUserPairingRecord, TraceRepository, TranscriptRecord,
-    TranscriptRepository, audit::AuditLogConfig,
+    FileDeliveryRequestRecord, PersistenceStore, RunRepository, SessionInboxRepository,
+    SessionOutputRouteRecord, StoreError, TelegramChatBindingRecord, TelegramChatStatusRecord,
+    TelegramRepository, TelegramUpdateCursorRecord, TelegramUserPairingRecord, ToolCallRepository,
+    TraceRepository, TranscriptRecord, TranscriptRepository, audit::AuditLogConfig,
 };
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,6 +75,7 @@ pub struct TelegramWorker<B> {
     bot_username: Arc<Mutex<Option<String>>>,
     delivery_limiter: Arc<Mutex<TelegramDeliveryLimiter>>,
     active_chat_turns: Arc<Mutex<HashSet<String>>>,
+    progress_status_cache: Arc<Mutex<HashMap<i64, String>>>,
 }
 
 impl<B> TelegramWorker<B>
@@ -101,6 +102,7 @@ where
             bot_username: Arc::new(Mutex::new(None)),
             delivery_limiter: Arc::new(Mutex::new(TelegramDeliveryLimiter::default())),
             active_chat_turns: Arc::new(Mutex::new(HashSet::new())),
+            progress_status_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1781,7 +1783,7 @@ where
         Ok(())
     }
 
-    async fn send_temporary_status_message(
+    pub(crate) async fn send_temporary_status_message(
         &self,
         chat_id: i64,
         now: i64,
@@ -1796,6 +1798,16 @@ where
                 ),
             )
             .await?;
+        self.progress_status_cache
+            .lock()
+            .expect("telegram progress status cache")
+            .insert(
+                chat_id,
+                render_temporary_status_html(
+                    progress.state(),
+                    self.app.config.telegram.status_detail_char_cap,
+                ),
+            );
         self.put_chat_status_record_async(
             chat_id,
             message.id.0,
@@ -1805,6 +1817,99 @@ where
         )
         .await?;
         Ok(message)
+    }
+
+    pub(crate) async fn refresh_active_chat_statuses(&self) -> Result<(), BootstrapError> {
+        let statuses = self.with_store_retry(|store| store.list_telegram_chat_statuses())?;
+        for status in statuses {
+            if status.state != TELEGRAM_CHAT_STATUS_ACTIVE {
+                continue;
+            }
+            let Some((session_id, html)) =
+                self.render_status_from_session_state(status.telegram_chat_id)?
+            else {
+                continue;
+            };
+            let should_edit = {
+                let mut cache = self
+                    .progress_status_cache
+                    .lock()
+                    .expect("telegram progress status cache");
+                if cache.get(&status.telegram_chat_id) == Some(&html) {
+                    false
+                } else {
+                    cache.insert(status.telegram_chat_id, html.clone());
+                    true
+                }
+            };
+            if should_edit
+                && let Err(error) = self
+                    .edit_html_delivered(status.telegram_chat_id, status.message_id, &html)
+                    .await
+            {
+                DiagnosticEventBuilder::new(
+                    &self.app.config,
+                    "warn",
+                    "telegram",
+                    "status_edit.skipped",
+                    "telegram progress status edit failed",
+                )
+                .error(error.to_string())
+                .field("chat_id", status.telegram_chat_id)
+                .field("message_id", i64::from(status.message_id))
+                .field("session_id", session_id.as_str())
+                .emit(&self.audit);
+            }
+        }
+        Ok(())
+    }
+
+    fn render_status_from_session_state(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<(String, String)>, BootstrapError> {
+        let Some(binding) =
+            self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?
+        else {
+            return Ok(None);
+        };
+        let Some(session_id) = binding.selected_session_id else {
+            return Ok(None);
+        };
+        let runs =
+            self.with_store_retry(|store| store.list_recent_runs_for_session(&session_id, 1))?;
+        let Some(run) = runs.last() else {
+            return Ok(None);
+        };
+        if run.finished_at.is_some() {
+            return Ok(None);
+        }
+
+        let mut progress = TelegramProgressTracker::default();
+        progress.apply(&ChatExecutionEvent::ProviderLoopProgress {
+            current_round: 1,
+            max_rounds: self.app.config.provider.max_tool_rounds.unwrap_or(24) as usize,
+        });
+        let tool_calls = self.with_store_retry(|store| store.list_tool_calls_for_run(&run.id))?;
+        for call in tool_calls {
+            let Some(status) = tool_status_from_record(call.status.as_str()) else {
+                continue;
+            };
+            let summary = call.result_summary.or(call.error).unwrap_or(call.summary);
+            progress.apply(&ChatExecutionEvent::ToolStatus {
+                tool_call_id: call.id,
+                tool_name: call.tool_name,
+                summary,
+                status,
+            });
+        }
+        Ok(Some((
+            session_id,
+            render_temporary_status_html(
+                progress.state(),
+                self.app.config.telegram.status_detail_char_cap,
+            ),
+        )))
     }
 
     async fn fail_temporary_status_message(
@@ -1821,6 +1926,10 @@ where
         )
         .await?;
         self.mark_chat_status_stale(chat_id, message_id, now)?;
+        self.progress_status_cache
+            .lock()
+            .expect("telegram progress status cache")
+            .remove(&chat_id);
         Ok(())
     }
 
@@ -1895,7 +2004,12 @@ where
             TELEGRAM_CHAT_STATUS_STALE,
             Some(now + self.app.config.telegram.status_ttl_seconds),
             now,
-        )
+        )?;
+        self.progress_status_cache
+            .lock()
+            .expect("telegram progress status cache")
+            .remove(&chat_id);
+        Ok(())
     }
 
     async fn cleanup_chat_status_before_idle_turn(
@@ -1970,6 +2084,10 @@ where
                 self.with_store_retry(|store| {
                     store.delete_telegram_chat_status(status.telegram_chat_id)
                 })?;
+                self.progress_status_cache
+                    .lock()
+                    .expect("telegram progress status cache")
+                    .remove(&status.telegram_chat_id);
             }
         }
         Ok(())
@@ -3659,6 +3777,18 @@ fn render_session_lifecycle(
         queue_status.to_string(),
     ]
     .join("\n")
+}
+
+fn tool_status_from_record(status: &str) -> Option<ToolExecutionStatus> {
+    match status {
+        "requested" => Some(ToolExecutionStatus::Requested),
+        "waiting_approval" => Some(ToolExecutionStatus::WaitingApproval),
+        "approved" => Some(ToolExecutionStatus::Approved),
+        "running" => Some(ToolExecutionStatus::Running),
+        "completed" => Some(ToolExecutionStatus::Completed),
+        "failed" => Some(ToolExecutionStatus::Failed),
+        _ => None,
+    }
 }
 
 fn session_lifecycle_state(summary: &SessionSummary) -> &'static str {

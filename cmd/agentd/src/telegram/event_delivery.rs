@@ -7,10 +7,12 @@ use super::render::render_model_response_chunks;
 use crate::bootstrap::App;
 use crate::delivery_worker::{DeliverySendError, DeliverySender};
 use crate::diagnostics::DiagnosticEventBuilder;
-use agent_persistence::{DeliveryTargetRecord, audit::AuditLogConfig};
+use agent_persistence::{
+    DeliveryTargetRecord, TelegramChatStatusRecord, TelegramRepository, audit::AuditLogConfig,
+};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub(crate) struct TelegramEventDeliverySender {
@@ -67,6 +69,45 @@ impl TelegramEventDeliverySender {
                 .await?;
             }
         }
+        if let Err(error) = self.mark_chat_status_stale(chat_id) {
+            DiagnosticEventBuilder::new(
+                &self.app.config,
+                "warn",
+                "telegram",
+                "status_cleanup.skipped",
+                "telegram status cleanup failed after event delivery",
+            )
+            .surface("telegram")
+            .entrypoint("event_runtime")
+            .field("chat_id", chat_id)
+            .error(error)
+            .emit(&self.audit);
+        }
+        Ok(())
+    }
+
+    fn mark_chat_status_stale(&self, chat_id: i64) -> Result<(), String> {
+        let store = self.app.store().map_err(|error| error.to_string())?;
+        let Some(status) = store
+            .get_telegram_chat_status(chat_id)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(());
+        };
+        if status.state != "active" {
+            return Ok(());
+        }
+        let now = unix_timestamp();
+        store
+            .put_telegram_chat_status(&TelegramChatStatusRecord {
+                telegram_chat_id: status.telegram_chat_id,
+                message_id: status.message_id,
+                state: "stale".to_string(),
+                expires_at: Some(now + self.app.config.telegram.status_ttl_seconds),
+                created_at: status.created_at,
+                updated_at: now,
+            })
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -196,4 +237,11 @@ impl DeliverySender for TelegramEventDeliverySender {
             tokio::runtime::Handle::current().block_on(self.send_text_async(target, text))
         })
     }
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
