@@ -1797,162 +1797,10 @@ impl AppConfig {
             });
         }
 
-        if self.database.url.trim().is_empty() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "database.url",
-                value: self.database.url.clone(),
-                reason: "must not be empty",
-            });
-        }
-        if self.database.application_name.trim().is_empty() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "database.application_name",
-                value: self.database.application_name.clone(),
-                reason: "must not be empty",
-            });
-        }
-        validate_positive_u64_value(
-            "database.connect_timeout_seconds",
-            self.database.connect_timeout_seconds,
-        )?;
-        validate_event_bus_backend("event_bus.backend", self.event_bus.backend.as_str())?;
-        validate_non_empty_config_string(
-            "event_bus.input_stream",
-            self.event_bus.input_stream.as_str(),
-        )?;
-        validate_non_empty_config_string(
-            "event_bus.session_stream",
-            self.event_bus.session_stream.as_str(),
-        )?;
-        validate_non_empty_config_string(
-            "event_bus.delivery_stream",
-            self.event_bus.delivery_stream.as_str(),
-        )?;
-        validate_non_empty_config_string(
-            "event_bus.task_stream",
-            self.event_bus.task_stream.as_str(),
-        )?;
-        validate_non_empty_config_string(
-            "event_bus.dlq_stream",
-            self.event_bus.dlq_stream.as_str(),
-        )?;
-        if let Some(nats_url) = &self.event_bus.nats_url
-            && nats_url.trim().is_empty()
-        {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "event_bus.nats_url",
-                value: nats_url.clone(),
-                reason: "must not be empty when configured",
-            });
-        }
-        if self.event_bus.required && self.event_bus.nats_url.is_none() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "event_bus.nats_url",
-                value: String::new(),
-                reason: "must be set when event_bus.required is true",
-            });
-        }
-
-        if self.daemon.bind_host.trim().is_empty() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.bind_host",
-                value: self.daemon.bind_host.clone(),
-                reason: "must not be empty",
-            });
-        }
-
-        if self.daemon.bind_port == 0 {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.bind_port",
-                value: self.daemon.bind_port.to_string(),
-                reason: "must be greater than zero",
-            });
-        }
-
-        if self.daemon.skills_dir.as_os_str().is_empty() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.skills_dir",
-                value: self.daemon.skills_dir.display().to_string(),
-                reason: "must not be empty",
-            });
-        }
-        if self.daemon.worker_lease_owner.trim().is_empty() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.worker_lease_owner",
-                value: self.daemon.worker_lease_owner.clone(),
-                reason: "must not be empty",
-            });
-        }
-
-        if let Some(public_base_url) = &self.daemon.public_base_url
-            && public_base_url.trim().is_empty()
-        {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.public_base_url",
-                value: public_base_url.clone(),
-                reason: "must not be empty",
-            });
-        }
-
-        if self.daemon.skills_dir.exists() && !self.daemon.skills_dir.is_dir() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "daemon.skills_dir",
-                value: self.daemon.skills_dir.display().to_string(),
-                reason: "must point to a directory",
-            });
-        }
-
-        if self.telegram.enabled && self.telegram.bot_token.is_none() {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "telegram.bot_token",
-                value: String::new(),
-                reason: "must be set when telegram.enabled is true",
-            });
-        }
-
-        if let Some(bot_token) = &self.telegram.bot_token
-            && bot_token.trim().is_empty()
-        {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "telegram.bot_token",
-                value: bot_token.clone(),
-                reason: "must not be empty",
-            });
-        }
-        validate_telegram_mode("telegram.mode", self.telegram.mode.as_str())?;
-        if self.event_bus.required && self.telegram.enabled && self.telegram.mode != "webhook" {
-            return Err(ConfigError::InvalidProviderValue {
-                name: "telegram.mode",
-                value: self.telegram.mode.clone(),
-                reason: "must be webhook when event_bus.required is true",
-            });
-        }
-        if self.telegram.enabled && self.telegram.mode == "webhook" {
-            if self
-                .telegram
-                .webhook_public_url
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err(ConfigError::InvalidProviderValue {
-                    name: "telegram.webhook_public_url",
-                    value: self.telegram.webhook_public_url.clone().unwrap_or_default(),
-                    reason: "must be set when telegram.mode is webhook",
-                });
-            }
-            if self
-                .telegram
-                .webhook_secret
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err(ConfigError::InvalidProviderValue {
-                    name: "telegram.webhook_secret",
-                    value: self.telegram.webhook_secret.clone().unwrap_or_default(),
-                    reason: "must be set when telegram.mode is webhook",
-                });
-            }
-        }
+        validate_database_config(&self.database)?;
+        validate_event_bus_config(&self.event_bus)?;
+        validate_daemon_config(&self.daemon)?;
+        validate_telegram_config(&self.telegram, &self.event_bus)?;
 
         if self.web.search_url.trim().is_empty() {
             return Err(ConfigError::InvalidProviderValue {
@@ -3032,6 +2880,167 @@ where
         });
     }
 
+    Ok(())
+}
+
+fn validate_database_config(database: &DatabaseConfig) -> Result<(), ConfigError> {
+    if database.url.trim().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "database.url",
+            value: database.url.clone(),
+            reason: "must not be empty",
+        });
+    }
+    if database.application_name.trim().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "database.application_name",
+            value: database.application_name.clone(),
+            reason: "must not be empty",
+        });
+    }
+    validate_positive_u64_value(
+        "database.connect_timeout_seconds",
+        database.connect_timeout_seconds,
+    )
+}
+
+fn validate_event_bus_config(event_bus: &EventBusConfig) -> Result<(), ConfigError> {
+    validate_event_bus_backend("event_bus.backend", event_bus.backend.as_str())?;
+    validate_non_empty_config_string("event_bus.input_stream", event_bus.input_stream.as_str())?;
+    validate_non_empty_config_string(
+        "event_bus.session_stream",
+        event_bus.session_stream.as_str(),
+    )?;
+    validate_non_empty_config_string(
+        "event_bus.delivery_stream",
+        event_bus.delivery_stream.as_str(),
+    )?;
+    validate_non_empty_config_string("event_bus.task_stream", event_bus.task_stream.as_str())?;
+    validate_non_empty_config_string("event_bus.dlq_stream", event_bus.dlq_stream.as_str())?;
+    if let Some(nats_url) = &event_bus.nats_url
+        && nats_url.trim().is_empty()
+    {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "event_bus.nats_url",
+            value: nats_url.clone(),
+            reason: "must not be empty when configured",
+        });
+    }
+    if event_bus.required && event_bus.nats_url.is_none() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "event_bus.nats_url",
+            value: String::new(),
+            reason: "must be set when event_bus.required is true",
+        });
+    }
+    Ok(())
+}
+
+fn validate_daemon_config(daemon: &DaemonConfig) -> Result<(), ConfigError> {
+    if daemon.bind_host.trim().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.bind_host",
+            value: daemon.bind_host.clone(),
+            reason: "must not be empty",
+        });
+    }
+
+    if daemon.bind_port == 0 {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.bind_port",
+            value: daemon.bind_port.to_string(),
+            reason: "must be greater than zero",
+        });
+    }
+
+    if daemon.skills_dir.as_os_str().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.skills_dir",
+            value: daemon.skills_dir.display().to_string(),
+            reason: "must not be empty",
+        });
+    }
+    if daemon.worker_lease_owner.trim().is_empty() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.worker_lease_owner",
+            value: daemon.worker_lease_owner.clone(),
+            reason: "must not be empty",
+        });
+    }
+
+    if let Some(public_base_url) = &daemon.public_base_url
+        && public_base_url.trim().is_empty()
+    {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.public_base_url",
+            value: public_base_url.clone(),
+            reason: "must not be empty",
+        });
+    }
+
+    if daemon.skills_dir.exists() && !daemon.skills_dir.is_dir() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "daemon.skills_dir",
+            value: daemon.skills_dir.display().to_string(),
+            reason: "must point to a directory",
+        });
+    }
+    Ok(())
+}
+
+fn validate_telegram_config(
+    telegram: &TelegramConfig,
+    event_bus: &EventBusConfig,
+) -> Result<(), ConfigError> {
+    if telegram.enabled && telegram.bot_token.is_none() {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "telegram.bot_token",
+            value: String::new(),
+            reason: "must be set when telegram.enabled is true",
+        });
+    }
+
+    if let Some(bot_token) = &telegram.bot_token
+        && bot_token.trim().is_empty()
+    {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "telegram.bot_token",
+            value: bot_token.clone(),
+            reason: "must not be empty",
+        });
+    }
+    validate_telegram_mode("telegram.mode", telegram.mode.as_str())?;
+    if event_bus.required && telegram.enabled && telegram.mode != "webhook" {
+        return Err(ConfigError::InvalidProviderValue {
+            name: "telegram.mode",
+            value: telegram.mode.clone(),
+            reason: "must be webhook when event_bus.required is true",
+        });
+    }
+    if telegram.enabled && telegram.mode == "webhook" {
+        if telegram
+            .webhook_public_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.webhook_public_url",
+                value: telegram.webhook_public_url.clone().unwrap_or_default(),
+                reason: "must be set when telegram.mode is webhook",
+            });
+        }
+        if telegram
+            .webhook_secret
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::InvalidProviderValue {
+                name: "telegram.webhook_secret",
+                value: telegram.webhook_secret.clone().unwrap_or_default(),
+                reason: "must be set when telegram.mode is webhook",
+            });
+        }
+    }
     Ok(())
 }
 
