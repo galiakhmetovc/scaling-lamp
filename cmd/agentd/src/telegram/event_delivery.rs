@@ -7,8 +7,10 @@ use super::render::render_model_response_chunks;
 use crate::bootstrap::App;
 use crate::delivery_worker::{DeliverySendError, DeliverySender};
 use crate::diagnostics::DiagnosticEventBuilder;
+use crate::store_retry::{retry_store_sync, store_retry_attempts, store_retry_delay};
 use agent_persistence::{
-    DeliveryTargetRecord, TelegramChatStatusRecord, TelegramRepository, audit::AuditLogConfig,
+    DeliveryTargetRecord, PersistenceStore, TelegramChatStatusRecord, TelegramRepository,
+    audit::AuditLogConfig,
 };
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -69,7 +71,7 @@ impl TelegramEventDeliverySender {
                 .await?;
             }
         }
-        if let Err(error) = self.mark_chat_status_stale(chat_id) {
+        if let Err(error) = self.mark_chat_status_stale(chat_id).await {
             DiagnosticEventBuilder::new(
                 &self.app.config,
                 "warn",
@@ -86,29 +88,33 @@ impl TelegramEventDeliverySender {
         Ok(())
     }
 
-    fn mark_chat_status_stale(&self, chat_id: i64) -> Result<(), String> {
-        let store = self.app.store().map_err(|error| error.to_string())?;
-        let Some(status) = store
-            .get_telegram_chat_status(chat_id)
-            .map_err(|error| error.to_string())?
-        else {
-            return Ok(());
-        };
-        if status.state != "active" {
-            return Ok(());
-        }
-        let now = unix_timestamp();
-        store
-            .put_telegram_chat_status(&TelegramChatStatusRecord {
-                telegram_chat_id: status.telegram_chat_id,
-                message_id: status.message_id,
-                state: "stale".to_string(),
-                expires_at: Some(now + self.app.config.telegram.status_ttl_seconds),
-                created_at: status.created_at,
-                updated_at: now,
+    async fn mark_chat_status_stale(&self, chat_id: i64) -> Result<(), String> {
+        let persistence = self.app.persistence.clone();
+        let ttl_seconds = self.app.config.telegram.status_ttl_seconds;
+        tokio::task::spawn_blocking(move || {
+            retry_store_sync(store_retry_attempts(), store_retry_delay(), || {
+                let store = PersistenceStore::open_runtime(&persistence)?;
+                let Some(status) = store.get_telegram_chat_status(chat_id)? else {
+                    return Ok(());
+                };
+                if status.state != "active" {
+                    return Ok(());
+                }
+                let now = unix_timestamp();
+                store.put_telegram_chat_status(&TelegramChatStatusRecord {
+                    telegram_chat_id: status.telegram_chat_id,
+                    message_id: status.message_id,
+                    state: "stale".to_string(),
+                    expires_at: Some(now + ttl_seconds),
+                    created_at: status.created_at,
+                    updated_at: now,
+                })?;
+                Ok(())
             })
-            .map_err(|error| error.to_string())?;
-        Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
     }
 
     async fn deliver_with_retry<F, Fut>(
