@@ -411,6 +411,11 @@ impl App {
         self.agent_schedule(id).map(AgentScheduleView::from)
     }
 
+    pub fn agent_schedule_views(&self) -> Result<Vec<AgentScheduleView>, BootstrapError> {
+        self.list_agent_schedules()
+            .map(|schedules| schedules.into_iter().map(AgentScheduleView::from).collect())
+    }
+
     pub fn create_agent_schedule(
         &self,
         id: &str,
@@ -537,6 +542,37 @@ impl App {
                 ..AgentScheduleUpdatePatch::default()
             },
         )
+    }
+
+    pub fn trigger_agent_schedule_now(&self, id: &str) -> Result<AgentSchedule, BootstrapError> {
+        let store = self.store()?;
+        let current = self.agent_schedule(id)?;
+        let now = unix_timestamp()?;
+        let updated = AgentSchedule::new(AgentScheduleInit {
+            id: current.id.clone(),
+            agent_profile_id: current.agent_profile_id.clone(),
+            workspace_root: current.workspace_root.clone(),
+            prompt: current.prompt.clone(),
+            mode: current.mode,
+            delivery_mode: current.delivery_mode,
+            target_session_id: current.target_session_id.clone(),
+            interval_seconds: current.interval_seconds,
+            next_fire_at: now,
+            enabled: true,
+            last_triggered_at: current.last_triggered_at,
+            last_finished_at: current.last_finished_at,
+            last_session_id: current.last_session_id.clone(),
+            last_job_id: current.last_job_id.clone(),
+            last_result: Some("queued_for_immediate_dispatch".to_string()),
+            last_error: None,
+            created_at: current.created_at,
+            updated_at: now,
+        })
+        .map_err(|error| BootstrapError::Usage {
+            reason: error.to_string(),
+        })?;
+        store.put_agent_schedule(&AgentScheduleRecord::from(&updated))?;
+        Ok(updated)
     }
 
     pub fn delete_agent_schedule(&self, id: &str) -> Result<bool, BootstrapError> {

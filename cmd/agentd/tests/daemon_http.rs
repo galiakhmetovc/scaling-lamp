@@ -15,13 +15,13 @@ use agent_runtime::tool::{
 use agentd::bootstrap;
 use agentd::daemon;
 use agentd::http::types::{
-    AgentFileReadResponse, AgentFileWriteResponse, AgentFilesResponse, CreateSessionRequest,
-    DaemonStopResponse, DiagnosticsTailRequest, DiagnosticsTailResponse, ErrorResponse,
-    McpConnectorCreateRequest, McpConnectorDetailResponse, McpConnectorUpdateRequest,
-    MemoryRenderResponse, SessionArtifactFileResponse, SessionArtifactFilesResponse,
-    SessionBackgroundJobResponse, SessionDebugResponse, SessionSummaryResponse,
-    SessionWorkspaceFileResponse, SessionWorkspaceListResponse, SkillCommandRequest,
-    StatusResponse, TaskControlResponse, TaskRenderResponse,
+    AgentFileReadResponse, AgentFileWriteResponse, AgentFilesResponse, AgentScheduleDetailResponse,
+    AgentScheduleListResponse, CreateSessionRequest, DaemonStopResponse, DiagnosticsTailRequest,
+    DiagnosticsTailResponse, ErrorResponse, McpConnectorCreateRequest, McpConnectorDetailResponse,
+    McpConnectorUpdateRequest, MemoryRenderResponse, SessionArtifactFileResponse,
+    SessionArtifactFilesResponse, SessionBackgroundJobResponse, SessionDebugResponse,
+    SessionSummaryResponse, SessionWorkspaceFileResponse, SessionWorkspaceListResponse,
+    SkillCommandRequest, StatusResponse, TaskControlResponse, TaskRenderResponse,
 };
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -164,6 +164,54 @@ fn daemon_http_can_manage_agent_profile_files() {
         .send()
         .expect("invalid agent file write response");
     assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+
+    handle.stop().expect("stop daemon");
+}
+
+#[test]
+fn daemon_http_lists_agent_schedules_as_structured_json() {
+    let (_temp, app, base_url) = test_app(Some("secret-token"));
+    app.create_agent_schedule(
+        "schedule-web-json",
+        900,
+        "Сформируй короткий статус runtime.",
+        Some("default"),
+    )
+    .expect("create schedule");
+    let handle = daemon::spawn_for_test(app).expect("spawn daemon");
+    let client = Client::new();
+
+    let response = client
+        .get(format!("{base_url}/v1/agent-schedules/list"))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("schedule list response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: AgentScheduleListResponse = response.json().expect("schedule list json");
+    assert_eq!(body.schedules.len(), 1);
+    let schedule = &body.schedules[0];
+    assert_eq!(schedule.id, "schedule-web-json");
+    assert_eq!(schedule.agent_profile_id, "default");
+    assert_eq!(schedule.interval_seconds, 900);
+    assert!(schedule.enabled);
+
+    let run_now_response = client
+        .post(format!(
+            "{base_url}/v1/agent-schedules/schedule-web-json/run-now"
+        ))
+        .bearer_auth("secret-token")
+        .send()
+        .expect("schedule run now response");
+    assert_eq!(run_now_response.status(), StatusCode::OK);
+    let run_now: AgentScheduleDetailResponse =
+        run_now_response.json().expect("schedule run now json");
+    assert_eq!(run_now.schedule.id, "schedule-web-json");
+    assert!(run_now.schedule.enabled);
+    assert_eq!(
+        run_now.schedule.last_result.as_deref(),
+        Some("queued_for_immediate_dispatch")
+    );
 
     handle.stop().expect("stop daemon");
 }

@@ -12,6 +12,7 @@ import { MeshScreen } from "./features/mesh/MeshScreen";
 import { OperationsScreen } from "./features/operations/OperationsScreen";
 import { OverviewScreen } from "./features/overview/OverviewScreen";
 import { RoutesView } from "./features/routes/RoutesView";
+import { SchedulesScreen } from "./features/schedules/SchedulesScreen";
 import { SessionsScreen } from "./features/sessions/SessionsScreen";
 import { TasksPane } from "./features/sessions/TasksPane";
 import { buildSessionEvents, type SessionPane } from "./features/sessions/sessionEvents";
@@ -314,6 +315,10 @@ export function App() {
       setSection("tools");
       return;
     }
+    if (command.id === "open-schedules") {
+      setSection("schedules");
+      return;
+    }
     if (command.id === "open-files") {
       setSection("files");
       return;
@@ -339,7 +344,7 @@ export function App() {
       return;
     }
     if (command.id === "send-help") {
-      setNotice("Команды web: /new, /sessions, /status, /ops, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /memory, /skills, /tools, /debug.");
+      setNotice("Команды web: /new, /sessions, /status, /ops, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /schedules, /files, /memory, /skills, /tools, /debug.");
       return;
     }
     if (!selectedSessionId) {
@@ -626,6 +631,17 @@ export function App() {
             />
             <TasksPane tasks={tasks} />
           </>
+        );
+      case "schedules":
+        return (
+          <SchedulesScreen
+            agents={snapshot?.agents ?? []}
+            sessions={sessions}
+            onOpenSession={(sessionId) => {
+              setSelectedSessionId(sessionId);
+              setSection("chat");
+            }}
+          />
         );
       case "tools":
         return (

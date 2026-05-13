@@ -360,6 +360,43 @@ export type SessionTask = {
   error?: string | null;
 };
 
+export type AgentScheduleMode = "interval" | "after_completion" | "once";
+
+export type AgentScheduleDeliveryMode = "fresh_session" | "existing_session";
+
+export type AgentSchedule = {
+  id: string;
+  agent_profile_id: string;
+  workspace_root: string;
+  prompt: string;
+  mode: AgentScheduleMode;
+  delivery_mode: AgentScheduleDeliveryMode;
+  target_session_id?: string | null;
+  interval_seconds: number;
+  next_fire_at: number;
+  enabled: boolean;
+  last_triggered_at?: number | null;
+  last_finished_at?: number | null;
+  last_session_id?: string | null;
+  last_job_id?: string | null;
+  last_result?: string | null;
+  last_error?: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type AgentScheduleCreateOptions = {
+  agent_identifier?: string | null;
+  prompt: string;
+  mode: AgentScheduleMode;
+  delivery_mode: AgentScheduleDeliveryMode;
+  target_session_id?: string | null;
+  interval_seconds: number;
+  enabled: boolean;
+};
+
+export type AgentScheduleUpdatePatch = Partial<AgentScheduleCreateOptions>;
+
 export type PendingApproval = {
   run_id: string;
   approval_id: string;

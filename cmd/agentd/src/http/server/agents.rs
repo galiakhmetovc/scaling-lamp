@@ -4,8 +4,9 @@ use crate::http::types::{
     AgentCreateRequest, AgentDeleteResponse, AgentDetailResponse, AgentFileEntryResponse,
     AgentFileReadResponse, AgentFileWriteRequest, AgentFileWriteResponse, AgentFilesResponse,
     AgentRenderResponse, AgentResolveRequest, AgentScheduleCreateRequest,
-    AgentScheduleDetailResponse, AgentScheduleResolveRequest, AgentScheduleUpdateRequest,
-    AgentSelectRequest, AgentSummaryResponse, AgentUpdateRequest, ErrorResponse,
+    AgentScheduleDetailResponse, AgentScheduleListResponse, AgentScheduleResolveRequest,
+    AgentScheduleUpdateRequest, AgentSelectRequest, AgentSummaryResponse, AgentUpdateRequest,
+    ErrorResponse,
 };
 use agent_persistence::{AgentProfileRecord, AgentRepository};
 use agent_runtime::agent::AgentProfile;
@@ -677,6 +678,20 @@ pub(super) fn handle_list_agent_schedules(app: &App, request: Request) -> std::i
     }
 }
 
+pub(super) fn handle_list_agent_schedule_views(app: &App, request: Request) -> std::io::Result<()> {
+    match app.agent_schedule_views() {
+        Ok(schedules) => respond_json(
+            request,
+            StatusCode(200),
+            &AgentScheduleListResponse { schedules },
+        ),
+        Err(error) => {
+            let (status, payload) = map_bootstrap_error(error);
+            respond_json(request, status, &payload)
+        }
+    }
+}
+
 pub(super) fn handle_show_agent_schedule(app: &App, mut request: Request) -> std::io::Result<()> {
     let payload = match parse_json_body::<AgentScheduleResolveRequest>(&mut request) {
         Ok(payload) => payload,
@@ -784,6 +799,30 @@ pub(super) fn handle_agent_schedule_nested_routes(
     };
 
     match (method, tail) {
+        (Method::Post, tail) if tail.ends_with("/run-now") => {
+            let Some(schedule_id) = tail.strip_suffix("/run-now") else {
+                return respond_json(
+                    request,
+                    StatusCode(404),
+                    &ErrorResponse {
+                        error: "route not found".to_string(),
+                    },
+                );
+            };
+            match app.trigger_agent_schedule_now(schedule_id) {
+                Ok(schedule) => respond_json(
+                    request,
+                    StatusCode(200),
+                    &AgentScheduleDetailResponse {
+                        schedule: schedule.into(),
+                    },
+                ),
+                Err(error) => {
+                    let (status, payload) = map_bootstrap_error(error);
+                    respond_json(request, status, &payload)
+                }
+            }
+        }
         (Method::Patch, schedule_id) => {
             let mut request = request;
             let payload = match parse_json_body::<AgentScheduleUpdateRequest>(&mut request) {

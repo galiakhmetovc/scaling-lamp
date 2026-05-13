@@ -107,6 +107,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Get, "/v1/agent-schedules") => {
             agents::handle_list_agent_schedules(app, request)
         }
+        (&tiny_http::Method::Get, "/v1/agent-schedules/list") => {
+            agents::handle_list_agent_schedule_views(app, request)
+        }
         (&tiny_http::Method::Post, "/v1/agent-schedules/show") => {
             agents::handle_show_agent_schedule(app, request)
         }

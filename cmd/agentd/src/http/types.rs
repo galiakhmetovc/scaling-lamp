@@ -699,6 +699,11 @@ pub struct AgentScheduleDetailResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentScheduleListResponse {
+    pub schedules: Vec<AgentScheduleView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentScheduleUpdateRequest {
     pub patch: AgentScheduleUpdatePatch,
 }

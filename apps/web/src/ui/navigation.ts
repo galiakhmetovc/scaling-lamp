@@ -9,6 +9,7 @@ export type SectionId =
   | "skills"
   | "agents"
   | "tasks"
+  | "schedules"
   | "tools"
   | "routes"
   | "traces"
@@ -25,6 +26,7 @@ export const sections: Array<{ id: SectionId; label: string; description: string
   { id: "skills", label: "Skills", description: "активация навыков" },
   { id: "agents", label: "Агенты", description: "профили и workspaces" },
   { id: "tasks", label: "Задачи", description: "registry и делегации" },
+  { id: "schedules", label: "Расписания", description: "timers и delivery" },
   { id: "tools", label: "Tools", description: "вызовы и ошибки" },
   { id: "routes", label: "Маршруты", description: "delivery targets" },
   { id: "traces", label: "Traces", description: "OTel ссылки" },

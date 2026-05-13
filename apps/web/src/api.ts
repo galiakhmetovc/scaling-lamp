@@ -3,6 +3,9 @@ import type {
   AgentFile,
   AgentFiles,
   AgentFileWriteResult,
+  AgentSchedule,
+  AgentScheduleCreateOptions,
+  AgentScheduleUpdatePatch,
   AgentUpdatePatch,
   ArtifactFile,
   ArtifactFileSummary,
@@ -296,6 +299,32 @@ export const api = {
   },
   deleteAgent(agentId: string) {
     return requestJson<{ deleted: boolean }>(endpoint(`/v1/agents/${encodeURIComponent(agentId)}`), {
+      method: "DELETE"
+    });
+  },
+  agentSchedules(signal?: AbortSignal) {
+    return requestJson<{ schedules: AgentSchedule[] }>(endpoint("/v1/agent-schedules/list"), { signal });
+  },
+  createAgentSchedule(id: string, options: AgentScheduleCreateOptions) {
+    return requestJson<{ message: string }>(endpoint("/v1/agent-schedules"), {
+      method: "POST",
+      body: JSON.stringify({ id, options })
+    });
+  },
+  updateAgentSchedule(id: string, patch: AgentScheduleUpdatePatch) {
+    return requestJson<{ message: string }>(endpoint(`/v1/agent-schedules/${encodeURIComponent(id)}`), {
+      method: "PATCH",
+      body: JSON.stringify({ patch })
+    });
+  },
+  runAgentScheduleNow(id: string) {
+    return requestJson<{ schedule: AgentSchedule }>(endpoint(`/v1/agent-schedules/${encodeURIComponent(id)}/run-now`), {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+  },
+  deleteAgentSchedule(id: string) {
+    return requestJson<{ message: string }>(endpoint(`/v1/agent-schedules/${encodeURIComponent(id)}`), {
       method: "DELETE"
     });
   },
