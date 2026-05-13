@@ -153,7 +153,6 @@ pub struct TelegramConfig {
     pub typing_heartbeat_interval_seconds: u64,
     pub delivery_retry_attempts: usize,
     pub delivery_retry_base_delay_ms: u64,
-    pub chat_turn_fast_settle_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -647,7 +646,6 @@ impl Default for TelegramConfig {
             typing_heartbeat_interval_seconds: 4,
             delivery_retry_attempts: 3,
             delivery_retry_base_delay_ms: 250,
-            chat_turn_fast_settle_ms: 50,
         }
     }
 }
@@ -2059,10 +2057,6 @@ impl AppConfig {
         validate_positive_u64_value(
             "telegram.delivery_retry_base_delay_ms",
             self.telegram.delivery_retry_base_delay_ms,
-        )?;
-        validate_positive_u64_value(
-            "telegram.chat_turn_fast_settle_ms",
-            self.telegram.chat_turn_fast_settle_ms,
         )?;
         validate_positive_usize_value(
             "context.compaction_min_messages",

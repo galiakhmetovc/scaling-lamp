@@ -186,10 +186,10 @@ where
         let Some(from) = message.from.as_ref() else {
             return Ok(());
         };
-        self.cleanup_chat_status_for_new_input(message.chat.id.0)
-            .await?;
 
         if let Some(file) = extract_incoming_file(&message) {
+            self.cleanup_chat_status_for_new_input(message.chat.id.0)
+                .await?;
             return self.handle_file_message(&message, from, file).await;
         }
 
@@ -225,17 +225,34 @@ where
         }
 
         let now = unix_timestamp()?;
-        if self
-            .load_activated_pairing(telegram_user_id(from)?)?
-            .is_none()
-        {
+        let telegram_user_id = telegram_user_id(from)?;
+        if self.load_activated_pairing(telegram_user_id)?.is_none() {
             self.send_text_chunks(chat_id, &render_pairing_required_message())
                 .await?;
             return Ok(());
         }
 
+        let binding = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        if let Some(binding) = binding.as_ref()
+            && let Some(session_id) = binding.selected_session_id.as_ref()
+            && self.is_chat_turn_active(session_id)
+        {
+            return self
+                .handle_inbound_while_turn_running_with_binding(
+                    chat_id,
+                    message.id.0,
+                    session_id.clone(),
+                    text.to_string(),
+                    now,
+                    binding.clone(),
+                )
+                .await;
+        }
+
         let session = self
-            .resolve_or_create_private_session(chat_id, telegram_user_id(from)?, now)
+            .resolve_or_create_private_session(chat_id, telegram_user_id, now)
+            .await?;
+        self.cleanup_chat_status_before_idle_turn(chat_id, &session.id)
             .await?;
         self.start_or_queue_chat_turn(chat_id, message.id.0, session.id, text.to_string(), now)
             .await
@@ -291,7 +308,26 @@ where
         }
 
         let now = unix_timestamp()?;
+        let binding = self.with_store_retry(|store| store.get_telegram_chat_binding(chat_id))?;
+        if let Some(binding) = binding.as_ref()
+            && let Some(session_id) = binding.selected_session_id.as_ref()
+            && self.is_chat_turn_active(session_id)
+        {
+            return self
+                .handle_inbound_while_turn_running_with_binding(
+                    chat_id,
+                    message.id.0,
+                    session_id.clone(),
+                    content,
+                    now,
+                    binding.clone(),
+                )
+                .await;
+        }
+
         let session = self.resolve_or_create_group_session(chat_id, now).await?;
+        self.cleanup_chat_status_before_idle_turn(chat_id, &session.id)
+            .await?;
         self.start_or_queue_chat_turn(chat_id, message.id.0, session.id, content, now)
             .await
     }
@@ -327,6 +363,8 @@ where
             return Ok(());
         };
 
+        self.cleanup_chat_status_before_idle_turn(chat_id, &session.id)
+            .await?;
         let artifact = match self
             .download_and_store_telegram_file(message, &session, &file, now)
             .await
@@ -1038,7 +1076,7 @@ where
         chat_id: i64,
         artifact_id: &str,
     ) -> Result<(), BootstrapError> {
-        let Some(session_id) = self.selected_session_id_for_chat(chat_id)? else {
+        let Some(session_id) = self.selected_session_id_for_chat_async(chat_id).await? else {
             self.send_text_chunks(
                 chat_id,
                 "No selected session. Use /new or /use <session_id>.",
@@ -1234,18 +1272,21 @@ where
             ParsedTelegramCommand::Status => {
                 let summary = self.session_summary(session_id.clone()).await?;
                 let active_run = self.render_active_run(session_id.clone()).await?;
-                let queue_status = self.render_queue_status_async(chat_id).await?;
-                let default_agent = self.chat_default_agent_profile_id(chat_id)?;
-                self.send_text_chunks(
+                let queue_status = self
+                    .render_operator_queue_status_async(chat_id, &session_id)
+                    .await?;
+                let default_agent = self.chat_default_agent_profile_id_async(chat_id).await?;
+                self.send_text_chunks_detached(
                     chat_id,
-                    &render_session_operator_status(
+                    render_session_operator_status(
                         &summary,
                         default_agent.as_deref(),
                         &active_run,
                         &queue_status,
                     ),
-                )
-                .await
+                    "operator_status",
+                );
+                Ok(())
             }
             ParsedTelegramCommand::Lifecycle => {
                 let summary = self.session_summary(session_id.clone()).await?;
@@ -1303,12 +1344,12 @@ where
                 self.send_text_chunks(chat_id, &response).await
             }
             ParsedTelegramCommand::Stop => {
-                let response = self.cancel_active_run(session_id).await?;
-                self.send_text_chunks(chat_id, &response).await
+                self.cancel_active_run_detached(chat_id, session_id);
+                Ok(())
             }
             ParsedTelegramCommand::Cancel { task_id: None } => {
-                let response = self.cancel_all_session_work(session_id).await?;
-                self.send_text_chunks(chat_id, &response).await
+                self.cancel_all_session_work_detached(chat_id, session_id);
+                Ok(())
             }
             ParsedTelegramCommand::Cancel {
                 task_id: Some(task_id),
@@ -1696,6 +1737,25 @@ where
         Ok(())
     }
 
+    fn send_text_chunks_detached(&self, chat_id: i64, text: String, op: &'static str) {
+        let worker = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = worker.send_text_chunks(chat_id, &text).await {
+                DiagnosticEventBuilder::new(
+                    &worker.app.config,
+                    "warn",
+                    "telegram",
+                    "operator_response.delivery_error",
+                    "telegram operator response delivery failed",
+                )
+                .error(error.to_string())
+                .field("chat_id", chat_id)
+                .field("operator_op", op)
+                .emit(&worker.audit);
+            }
+        });
+    }
+
     async fn send_model_text_chunks(&self, chat_id: i64, text: &str) -> Result<(), BootstrapError> {
         self.send_model_text_chunks_with_trace(chat_id, text, None)
             .await
@@ -1838,6 +1898,17 @@ where
         )
     }
 
+    async fn cleanup_chat_status_before_idle_turn(
+        &self,
+        chat_id: i64,
+        session_id: &str,
+    ) -> Result<(), BootstrapError> {
+        if self.is_chat_turn_active(session_id) {
+            return Ok(());
+        }
+        self.cleanup_chat_status_for_new_input(chat_id).await
+    }
+
     async fn cleanup_chat_status_for_new_input(&self, chat_id: i64) -> Result<(), BootstrapError> {
         let Some(status) = self
             .with_store_retry_async(move |store| store.get_telegram_chat_status(chat_id))
@@ -1845,15 +1916,27 @@ where
         else {
             return Ok(());
         };
-        let _ = self
-            .delete_message_delivered(chat_id, status.message_id)
-            .await;
         let worker = self.clone();
+        let message_id = status.message_id;
         tokio::spawn(async move {
-            if let Err(error) = worker
+            let delete_result = worker.delete_message_delivered(chat_id, message_id).await;
+            let store_result = worker
                 .with_store_retry_async(move |store| store.delete_telegram_chat_status(chat_id))
-                .await
-            {
+                .await;
+            if let Err(error) = delete_result {
+                DiagnosticEventBuilder::new(
+                    &worker.app.config,
+                    "warn",
+                    "telegram",
+                    "chat_status.delete_message_error",
+                    "telegram chat status message cleanup failed",
+                )
+                .error(error.to_string())
+                .field("chat_id", chat_id)
+                .field("message_id", i64::from(message_id))
+                .emit(&worker.audit);
+            }
+            if let Err(error) = store_result {
                 DiagnosticEventBuilder::new(
                     &worker.app.config,
                     "warn",
@@ -2301,6 +2384,16 @@ where
             .and_then(|binding| binding.default_agent_profile_id))
     }
 
+    async fn chat_default_agent_profile_id_async(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<String>, BootstrapError> {
+        Ok(self
+            .with_store_retry_async(move |store| store.get_telegram_chat_binding(chat_id))
+            .await?
+            .and_then(|binding| binding.default_agent_profile_id))
+    }
+
     fn ensure_chat_delivery_cursor_initialized(
         &self,
         chat_id: i64,
@@ -2735,11 +2828,47 @@ where
             .map_err(map_join_error)?
     }
 
+    fn cancel_active_run_detached(&self, chat_id: i64, session_id: String) {
+        let worker = self.clone();
+        tokio::spawn(async move {
+            match worker.cancel_active_run(session_id).await {
+                Ok(response) => {
+                    worker.send_text_chunks_detached(chat_id, response, "operator_stop");
+                }
+                Err(error) => {
+                    worker.send_text_chunks_detached(
+                        chat_id,
+                        format!("Failed to stop active turn: {error}"),
+                        "operator_stop_error",
+                    );
+                }
+            }
+        });
+    }
+
     async fn cancel_all_session_work(&self, session_id: String) -> Result<String, BootstrapError> {
         let backend = self.backend.clone();
         tokio::task::spawn_blocking(move || backend.cancel_all_session_work(&session_id))
             .await
             .map_err(map_join_error)?
+    }
+
+    fn cancel_all_session_work_detached(&self, chat_id: i64, session_id: String) {
+        let worker = self.clone();
+        tokio::spawn(async move {
+            match worker.cancel_all_session_work(session_id).await {
+                Ok(response) => {
+                    worker.send_text_chunks_detached(chat_id, response, "operator_cancel");
+                }
+                Err(error) => {
+                    worker.send_text_chunks_detached(
+                        chat_id,
+                        format!("Failed to cancel session work: {error}"),
+                        "operator_cancel_error",
+                    );
+                }
+            }
+        });
     }
 
     async fn render_session_background_jobs(
@@ -2885,17 +3014,26 @@ where
         message: String,
         now: i64,
     ) -> Result<(), BootstrapError> {
-        let ack = match self.send_temporary_status_message(chat_id, now).await {
-            Ok(ack) => ack,
-            Err(error) => {
-                self.clear_chat_turn_active(&session_id);
-                return Err(error);
-            }
-        };
-
         let worker = self.clone();
         let cleanup_session_id = session_id.clone();
-        let task = tokio::spawn(async move {
+        tokio::spawn(async move {
+            let ack = match worker.send_temporary_status_message(chat_id, now).await {
+                Ok(ack) => ack,
+                Err(error) => {
+                    worker.clear_chat_turn_active(&cleanup_session_id);
+                    DiagnosticEventBuilder::new(
+                        &worker.app.config,
+                        "error",
+                        "telegram",
+                        "chat_turn.status_start_error",
+                        "telegram chat turn status start failed",
+                    )
+                    .error(error.to_string())
+                    .field("chat_id", chat_id)
+                    .emit(&worker.audit);
+                    return;
+                }
+            };
             let task_result = worker
                 .finish_chat_turn_background(chat_id, ack.id.0, session_id, message, now)
                 .await;
@@ -2913,23 +3051,6 @@ where
                 .emit(&worker.audit);
             }
         });
-
-        let settle = Duration::from_millis(self.app.config.telegram.chat_turn_fast_settle_ms);
-        let _ = tokio::task::spawn_blocking(move || std::thread::sleep(settle)).await;
-        if task.is_finished()
-            && let Err(error) = task.await
-        {
-            DiagnosticEventBuilder::new(
-                &self.app.config,
-                "error",
-                "telegram",
-                "chat_turn.background_join_error",
-                "telegram chat turn background task failed",
-            )
-            .error(error.to_string())
-            .field("chat_id", chat_id)
-            .emit(&self.audit);
-        }
         Ok(())
     }
 
@@ -2952,14 +3073,35 @@ where
             .await?;
             return Ok(());
         };
+        self.handle_inbound_while_turn_running_with_binding(
+            chat_id,
+            telegram_message_id,
+            session_id,
+            message,
+            now,
+            binding,
+        )
+        .await
+    }
+
+    async fn handle_inbound_while_turn_running_with_binding(
+        &self,
+        chat_id: i64,
+        telegram_message_id: i32,
+        session_id: String,
+        message: String,
+        now: i64,
+        binding: TelegramChatBindingRecord,
+    ) -> Result<(), BootstrapError> {
         let mode = self.effective_inbound_queue_mode(&binding);
         match mode.as_str() {
             TELEGRAM_INBOUND_QUEUE_MODE_REJECT => {
-                self.send_text_chunks(
+                self.send_text_chunks_detached(
                     chat_id,
-                    "A turn is already running in this session. Use /status to inspect it, /stop to stop the active turn, or /queue queue|coalesce to queue new messages.",
-                )
-                .await
+                    "A turn is already running in this session. Use /status to inspect it, /stop to stop the active turn, or /queue queue|coalesce to queue new messages.".to_string(),
+                    "active_inbound_reject",
+                );
+                Ok(())
             }
             TELEGRAM_INBOUND_QUEUE_MODE_QUEUE => {
                 self.queue_telegram_inbound_message_async(
@@ -2971,16 +3113,13 @@ where
                     now,
                 )
                 .await?;
-                let queued_count = self
-                    .queued_telegram_inbox_count_async(session_id.clone())
-                    .await?;
-                self.send_text_chunks(
+                self.send_text_chunks_detached(
                     chat_id,
-                    &format!(
-                        "Queued inbound message.\n- mode: queue\n- queued_inbound: {queued_count}"
-                    ),
-                )
-                .await
+                    "Queued inbound message.\n- mode: queue\n- queued_inbound: skipped in active-turn hot path"
+                        .to_string(),
+                    "active_inbound_queue",
+                );
+                Ok(())
             }
             TELEGRAM_INBOUND_QUEUE_MODE_COALESCE => {
                 let window_ms = self.effective_inbound_coalesce_window_ms(&binding);
@@ -2995,16 +3134,20 @@ where
                     available_at,
                 )
                 .await?;
-                let queued_count =
-                    self.refresh_queued_telegram_inbox_available_at_async(session_id.clone(), available_at)
-                        .await?;
-                self.send_text_chunks(
+                let queued_count = self
+                    .refresh_queued_telegram_inbox_available_at_async(
+                        session_id.clone(),
+                        available_at,
+                    )
+                    .await?;
+                self.send_text_chunks_detached(
                     chat_id,
-                    &format!(
+                    format!(
                         "Queued inbound message.\n- mode: coalesce\n- queued_inbound: {queued_count}\n- coalesce_window_ms: {window_ms}\n- available_in: ~{window_seconds}s"
                     ),
-                )
-                .await
+                    "active_inbound_coalesce",
+                );
+                Ok(())
             }
             TELEGRAM_INBOUND_QUEUE_MODE_RESTART => {
                 let _ = self.cancel_active_run(session_id.clone()).await?;
@@ -3017,23 +3160,22 @@ where
                     now,
                 )
                 .await?;
-                let queued_count = self
-                    .queued_telegram_inbox_count_async(session_id.clone())
-                    .await?;
-                self.send_text_chunks(
+                self.send_text_chunks_detached(
                     chat_id,
-                    &format!(
-                        "Active turn stop requested; queued inbound message.\n- mode: restart\n- queued_inbound: {queued_count}"
-                    ),
-                )
-                .await
+                    "Active turn stop requested; queued inbound message.\n- mode: restart\n- queued_inbound: skipped in active-turn hot path"
+                        .to_string(),
+                    "active_inbound_restart",
+                );
+                Ok(())
             }
             _ => {
-                self.send_text_chunks(
+                self.send_text_chunks_detached(
                     chat_id,
-                    "A turn is already running in this session. Use /status to inspect it.",
-                )
-                .await
+                    "A turn is already running in this session. Use /status to inspect it."
+                        .to_string(),
+                    "active_inbound_unknown",
+                );
+                Ok(())
             }
         }
     }
@@ -3085,6 +3227,31 @@ where
             &mode,
             queued_count,
             coalesce_window_ms,
+        ))
+    }
+
+    async fn render_operator_queue_status_async(
+        &self,
+        chat_id: i64,
+        session_id: &str,
+    ) -> Result<String, BootstrapError> {
+        if !self.is_chat_turn_active(session_id) {
+            return self.render_queue_status_async(chat_id).await;
+        }
+        let binding = self
+            .with_store_retry_async(move |store| store.get_telegram_chat_binding(chat_id))
+            .await?;
+        let mode = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_queue_mode(binding))
+            .unwrap_or_else(|| self.app.config.telegram.inbound_queue_default_mode.clone());
+        let coalesce_window_ms = binding
+            .as_ref()
+            .map(|binding| self.effective_inbound_coalesce_window_ms(binding))
+            .unwrap_or_else(|| self.configured_inbound_coalesce_window_ms());
+        Ok(format!(
+            "{}\n- queued_inbound_note: skipped while active turn is running",
+            render_queue_status_text(&mode, 0, coalesce_window_ms)
         ))
     }
 
@@ -3320,6 +3487,13 @@ where
             .lock()
             .expect("active telegram chat turns")
             .insert(session_id.to_string())
+    }
+
+    fn is_chat_turn_active(&self, session_id: &str) -> bool {
+        self.active_chat_turns
+            .lock()
+            .expect("active telegram chat turns")
+            .contains(session_id)
     }
 
     fn clear_chat_turn_active(&self, session_id: &str) {

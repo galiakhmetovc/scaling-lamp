@@ -712,7 +712,6 @@ typing_initial_delay_ms = 750
 typing_heartbeat_interval_seconds = 4
 delivery_retry_attempts = 3
 delivery_retry_base_delay_ms = 250
-chat_turn_fast_settle_ms = 50
 pairing_token_ttl_seconds = 900
 max_upload_bytes = 16777216
 max_download_bytes = 41943040

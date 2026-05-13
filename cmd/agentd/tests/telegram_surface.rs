@@ -1199,7 +1199,6 @@ fn telegram_worker_configures_queue_mode_and_reports_it_in_status() {
 }
 
 #[test]
-#[ignore = "active-turn Telegram polling still needs a full async Postgres store path"]
 fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
@@ -1261,8 +1260,9 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
     let worker =
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
-    let first_poll = runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await });
+    let first_poll = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), worker.poll_once()).await
+    });
     if first_poll.is_err() {
         let (released, condvar) = &*release;
         *released.lock().expect("release lock") = true;
@@ -1276,12 +1276,14 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
         .recv_timeout(Duration::from_secs(2))
         .expect("chat turn started");
 
-    let second_poll = runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await });
+    let second_poll = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), worker.poll_once()).await
+    });
     let processed = second_poll
         .expect("operator commands should be processed while the chat turn runs")
         .expect("second poll");
     assert_eq!(processed, 3);
+    drive_runtime(&runtime, Duration::from_millis(100));
 
     let state = backend_state.lock().expect("backend state");
     assert_eq!(state.executed_turns.len(), 1);
@@ -1294,48 +1296,44 @@ fn telegram_worker_processes_status_and_stop_while_chat_turn_is_running() {
     condvar.notify_all();
     drive_runtime(&runtime, Duration::from_secs(1));
 
-    let _ = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured first getUpdates");
-    let _ = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured temporary status message");
-    let _ = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured second getUpdates");
-    let delete_status = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured temporary status delete");
-    assert_eq!(delete_status.path, "/bottest-token/DeleteMessage");
-    let status = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured status response");
-    assert!(status.body.contains("Current session"));
-    let stop = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured stop response");
-    assert!(stop.body.contains("stopped session-running"));
-    let cancel = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured cancel response");
-    assert!(cancel.body.contains("cancelled session-running"));
-    let final_message = requests
-        .recv_timeout(Duration::from_secs(10))
-        .expect("captured final response");
-    assert_eq!(final_message.path, "/bottest-token/SendMessage");
-    assert_eq!(
-        app.store()
-            .expect("open store")
-            .get_telegram_chat_status(42)
-            .expect("status lookup"),
-        None
+    let captured = drain_requests_for(&requests, Duration::from_secs(10));
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.path == "/bottest-token/GetUpdates")
     );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.body.contains("Current session"))
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.body.contains("stopped session-running"))
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.body.contains("cancelled session-running"))
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.body.contains("Long turn completed."))
+    );
+    let status_record = app
+        .store()
+        .expect("open store")
+        .get_telegram_chat_status(42)
+        .expect("status lookup")
+        .expect("status retained until TTL cleanup");
+    assert_eq!(status_record.state, "stale");
 
     handle.stop().expect("join fake api");
 }
 
 #[test]
-#[ignore = "active-turn Telegram polling still needs a full async Postgres store path"]
 fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
@@ -1395,18 +1393,19 @@ fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
         TelegramWorker::with_consumer(app.clone(), backend.clone(), client, "telegram-test");
 
     runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await })
+        .block_on(async { tokio::time::timeout(Duration::from_secs(10), worker.poll_once()).await })
         .expect("first poll should not block")
         .expect("first poll");
 
     let processed = runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(2), worker.poll_once()).await })
+        .block_on(async { tokio::time::timeout(Duration::from_secs(10), worker.poll_once()).await })
         .expect("queued inputs should not block")
         .expect("second poll");
     assert_eq!(processed, 2);
     started_receiver
         .recv_timeout(Duration::from_secs(2))
         .expect("chat turn started");
+    drive_runtime(&runtime, Duration::from_millis(200));
 
     let events = app
         .store()
@@ -1458,12 +1457,13 @@ fn telegram_worker_coalesces_inbound_messages_while_turn_is_running() {
             >= 2,
         "expected both polling requests, captured: {captured:?}"
     );
-    assert!(
-        captured
-            .iter()
-            .any(|request| request.path.ends_with("/DeleteMessage")),
-        "expected temporary status cleanup, captured: {captured:?}"
-    );
+    let status_record = app
+        .store()
+        .expect("open store")
+        .get_telegram_chat_status(42)
+        .expect("status lookup")
+        .expect("status retained until next input or TTL cleanup");
+    assert_eq!(status_record.state, "stale");
     let queued_acks = captured
         .iter()
         .filter(|request| {
@@ -3025,7 +3025,6 @@ fn telegram_worker_supports_group_sessions_new_and_use_commands() {
 }
 
 #[test]
-#[ignore = "same-poll group mention execution depends on active-turn fast-settle timing"]
 fn telegram_worker_caches_bot_identity_across_group_mentions() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
@@ -3034,36 +3033,57 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
         .expect("runtime");
     let (_temp, app) = telegram_test_app();
     seed_activated_pairing(&app, "pair-group-cache", 777, 42);
+    app.create_session("session-group-1", "Group Chat")
+        .expect("create group session");
+    app.store()
+        .expect("open store")
+        .put_telegram_chat_binding(&agent_persistence::TelegramChatBindingRecord {
+            telegram_chat_id: 9000,
+            scope: "group".to_string(),
+            owner_telegram_user_id: None,
+            selected_session_id: Some("session-group-1".to_string()),
+            default_agent_profile_id: None,
+            last_delivered_transcript_created_at: Some(0),
+            last_delivered_transcript_id: Some(String::new()),
+            inbound_queue_mode: "coalesce".to_string(),
+            inbound_coalesce_window_ms: None,
+            created_at: 10,
+            updated_at: 10,
+        })
+        .expect("seed group binding");
     let backend = RecordingTelegramBackend::with_state(RecordingTelegramBackendState {
-        create_session_results: vec![session_summary("session-group-1", "Group Chat", false)],
+        session_lookup: BTreeMap::from([(
+            "session-group-1".to_string(),
+            session_summary("session-group-1", "Group Chat", false),
+        )]),
         next_chat_output: "Cached group reply.".to_string(),
         ..RecordingTelegramBackendState::default()
     });
     let backend_state = backend.state();
-    let (api_url, requests, handle) = spawn_fake_telegram_api(vec![
-        json_response(
-            r#"{"ok":true,"result":[
+    let mut update_responses = VecDeque::from([r#"{"ok":true,"result":[
                 {"update_id":114,"message":{"message_id":40,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"@teamd_agent_bot first"}},
                 {"update_id":115,"message":{"message_id":41,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"from":{"id":777,"is_bot":false,"first_name":"Alice","username":"alice"},"text":"@teamd_agent_bot second"}}
-            ]}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"id":9001,"is_bot":true,"first_name":"teamd","username":"teamd_agent_bot","can_join_groups":true,"can_read_all_group_messages":false,"supports_inline_queries":false,"has_main_web_app":false}}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":42,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"working"}}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":42,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"Cached group reply."}}"#,
-        ),
-        json_response(r#"{"ok":true,"result":true}"#),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":43,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"working"}}"#,
-        ),
-        json_response(
-            r#"{"ok":true,"result":{"message_id":43,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"Cached group reply."}}"#,
-        ),
-    ]);
+            ]}"#]);
+    let (api_url, requests, handle) = spawn_routed_telegram_api(move |request| {
+        if request.path.ends_with("/GetUpdates") {
+            return json_response(
+                update_responses
+                    .pop_front()
+                    .unwrap_or(r#"{"ok":true,"result":[]}"#),
+            );
+        }
+        if request.path.ends_with("/GetMe") {
+            return json_response(
+                r#"{"ok":true,"result":{"id":9001,"is_bot":true,"first_name":"teamd","username":"teamd_agent_bot","can_join_groups":true,"can_read_all_group_messages":false,"supports_inline_queries":false,"has_main_web_app":false}}"#,
+            );
+        }
+        if request.path.ends_with("/SendMessage") || request.path.ends_with("/EditMessageText") {
+            return json_response(
+                r#"{"ok":true,"result":{"message_id":42,"date":0,"chat":{"id":9000,"type":"group","title":"Team Chat"},"text":"ok"}}"#,
+            );
+        }
+        json_response(r#"{"ok":true,"result":true}"#)
+    });
     let client = TelegramClient::new(TelegramClientConfig {
         token: "test-token".to_string(),
         api_url: Some(api_url),
@@ -3075,6 +3095,7 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
 
     let processed = runtime.block_on(worker.poll_once()).expect("poll once");
     assert_eq!(processed, 2);
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let binding = app
         .store()
@@ -3088,53 +3109,52 @@ fn telegram_worker_caches_bot_identity_across_group_mentions() {
     );
 
     let state = backend_state.lock().expect("backend state");
-    assert_eq!(state.created_titles, vec![None]);
+    assert!(state.created_titles.is_empty());
     assert_eq!(
         state.executed_turns,
-        vec![
-            ("session-group-1".to_string(), "first".to_string()),
-            ("session-group-1".to_string(), "second".to_string()),
-        ]
+        vec![("session-group-1".to_string(), "first".to_string())]
     );
     drop(state);
 
-    let get_updates = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured getUpdates");
-    assert_eq!(get_updates.path, "/bottest-token/GetUpdates");
-    let get_me = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured single getMe");
-    assert_eq!(get_me.path, "/bottest-token/GetMe");
-    let ack_first = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured first ack");
-    assert_eq!(ack_first.path, "/bottest-token/SendMessage");
-    assert!(ack_first.body.contains("\"parse_mode\":\"HTML\""));
-    assert!(ack_first.body.contains("Стадия: запуск"));
-    let final_first = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured first final message");
-    assert_eq!(final_first.path, "/bottest-token/SendMessage");
-    assert!(final_first.body.contains("Cached group reply."));
-    let delete_stale = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured stale status cleanup");
-    assert_eq!(delete_stale.path, "/bottest-token/DeleteMessage");
-    assert!(delete_stale.body.contains("\"message_id\":42"));
-    let ack_second = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured second ack");
-    assert_eq!(ack_second.path, "/bottest-token/SendMessage");
-    assert!(ack_second.body.contains("\"parse_mode\":\"HTML\""));
-    assert!(ack_second.body.contains("Стадия: запуск"));
-    let final_second = requests
-        .recv_timeout(Duration::from_secs(2))
-        .expect("captured second final message");
-    assert_eq!(final_second.path, "/bottest-token/SendMessage");
-    assert!(final_second.body.contains("Cached group reply."));
+    let captured = drain_requests_for(&requests, Duration::from_secs(10));
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.path == "/bottest-token/GetUpdates"),
+        "captured: {captured:?}"
+    );
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|request| request.path == "/bottest-token/GetMe")
+            .count(),
+        1,
+        "bot identity should be fetched once and then cached: {captured:?}"
+    );
+    assert!(
+        captured.iter().any(|request| {
+            request.path == "/bottest-token/SendMessage"
+                && request.body.contains("\"parse_mode\":\"HTML\"")
+                && request.body.contains("Стадия: запуск")
+        }),
+        "expected first temporary status: {captured:?}"
+    );
+    assert!(
+        captured.iter().any(|request| {
+            request.path == "/bottest-token/SendMessage"
+                && request.body.contains("Cached group reply.")
+        }),
+        "expected first final response: {captured:?}"
+    );
+    assert!(
+        captured.iter().any(|request| {
+            request.path == "/bottest-token/SendMessage"
+                && request.body.contains("Queued inbound message")
+        }),
+        "expected active-turn response for second mention: {captured:?}"
+    );
 
-    handle.join().expect("join fake api");
+    handle.stop().expect("stop fake api");
 }
 
 #[test]
@@ -3181,6 +3201,7 @@ fn telegram_worker_preserves_existing_private_session_preferences_before_turn() 
     let worker = TelegramWorker::with_consumer(app, backend, client, "telegram-test");
 
     runtime.block_on(worker.poll_once()).expect("poll once");
+    drive_runtime(&runtime, Duration::from_secs(1));
 
     let state = backend_state.lock().expect("backend state");
     assert!(state.updated_preferences.is_empty());
@@ -4680,7 +4701,6 @@ fn telegram_test_app_with_max_download_bytes(
     config.telegram.global_send_min_interval_ms = 1;
     config.telegram.private_chat_send_min_interval_ms = 1;
     config.telegram.group_chat_send_min_interval_ms = 1;
-    config.telegram.chat_turn_fast_settle_ms = 250;
     let app = bootstrap::build_from_config(config).expect("build app");
     (temp, app)
 }

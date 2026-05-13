@@ -835,7 +835,6 @@ typing_initial_delay_ms = 250
 typing_heartbeat_interval_seconds = 3
 delivery_retry_attempts = 5
 delivery_retry_base_delay_ms = 150
-chat_turn_fast_settle_ms = 25
 "#,
     )
     .expect("write config");
@@ -871,7 +870,6 @@ chat_turn_fast_settle_ms = 25
     assert_eq!(config.telegram.typing_heartbeat_interval_seconds, 3);
     assert_eq!(config.telegram.delivery_retry_attempts, 5);
     assert_eq!(config.telegram.delivery_retry_base_delay_ms, 150);
-    assert_eq!(config.telegram.chat_turn_fast_settle_ms, 25);
 }
 
 #[test]

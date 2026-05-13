@@ -47,7 +47,6 @@ typing_initial_delay_ms = 750
 typing_heartbeat_interval_seconds = 4
 delivery_retry_attempts = 3
 delivery_retry_base_delay_ms = 250
-chat_turn_fast_settle_ms = 50
 
 [event_bus]
 # PostgreSQL remains the source of truth; NATS JetStream is the durable

@@ -134,7 +134,6 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `typing_heartbeat_interval_seconds`
 - `delivery_retry_attempts`
 - `delivery_retry_base_delay_ms`
-- `chat_turn_fast_settle_ms`
 
 Рекомендуемое правило: `telegram.bot_token` не хранить в `config.toml`, а задавать через `TEAMD_TELEGRAM_BOT_TOKEN` в `.env` или environment.
 
