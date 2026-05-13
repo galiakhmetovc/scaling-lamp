@@ -179,7 +179,6 @@ apps/web/src/
 
 Ограничения текущей версии:
 
-- редактирование `SYSTEM.md`, `AGENTS.md` и `SKILL.md` пока не реализовано в web, потому что нужен отдельный безопасный `agentd` API для agent profile files;
 - workspace editor редактирует только текстовые файлы; для бинарных файлов доступен download;
 - если текстовый файл показан не полностью из-за лимита preview, сохранение отключено, чтобы не перезаписать файл обрезанным содержимым;
 - удаление/архивация агентов и сессий не вынесены в UI;
@@ -189,10 +188,10 @@ apps/web/src/
 
 P1 — управляемость агентом:
 
-1. Workspace file editor: read/download/create/edit/trash для файлов сессии.
-2. Skills screen: видимость automatic/manual/disabled и ручной enable/disable.
-3. Agent profile files: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
-4. Tools policy UI: показать доступные tools профиля и будущие overrides.
+1. Готово: Workspace file editor: read/download/create/edit/trash для файлов сессии.
+2. Готово: Skills screen: видимость automatic/manual/disabled и ручной enable/disable.
+3. Готово: Agent profile files: read/write `SYSTEM.md`, `AGENTS.md`, `skills/*/SKILL.md`.
+4. Готово: Tools policy UI: показать доступные tools профиля и будущие overrides.
 
 P2 — память и знания:
 

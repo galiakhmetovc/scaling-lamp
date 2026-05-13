@@ -19,9 +19,9 @@
 - Modify: `cmd/agentd/src/http/server.rs`
 - Test: `cmd/agentd/tests/bootstrap_app/mcp.rs`
 
-- [ ] Write failing test that `App::tool_catalog()` returns built-in tools and discovered MCP tools.
-- [ ] Implement `ToolCatalogView` and `ToolCatalogItemView`.
-- [ ] Add `GET /v1/tools/catalog`.
+- [x] Write failing test that `App::tool_catalog()` returns built-in tools and discovered MCP tools.
+- [x] Implement `ToolCatalogView` and `ToolCatalogItemView`.
+- [x] Add `GET /v1/tools/catalog`.
 
 ### Task 2: Web Operator Screen
 
@@ -33,16 +33,16 @@
 - Modify: `apps/web/src/types.ts`
 - Modify: `apps/web/src/App.tsx`
 
-- [ ] Write failing test for catalog family grouping and stats.
-- [ ] Implement grouping helpers.
-- [ ] Replace raw recent calls table section with tabs: catalog, recent calls, MCP connectors.
-- [ ] Show allowed/blocked status for selected session agent when available.
+- [x] Write failing test for catalog family grouping and stats.
+- [x] Implement grouping helpers.
+- [x] Replace raw recent calls table section with tabs: catalog, recent calls, MCP connectors.
+- [x] Show allowed/blocked status for selected session agent when available.
 
 ### Task 3: Verification
 
-- [ ] `corepack pnpm --dir apps/web test`
-- [ ] `corepack pnpm --dir apps/web build`
-- [ ] `cargo fmt --all`
-- [ ] `cargo test -p agentd --test bootstrap_app mcp`
-- [ ] `cargo build -p agentd`
-- [ ] Commit and push.
+- [x] `corepack pnpm --dir apps/web test`
+- [x] `corepack pnpm --dir apps/web build`
+- [x] `cargo fmt --all`
+- [x] `cargo test -p agentd --test bootstrap_app mcp`
+- [x] `cargo build -p agentd`
+- [x] Commit and push.
