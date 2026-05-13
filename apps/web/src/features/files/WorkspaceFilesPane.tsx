@@ -1,65 +1,119 @@
 import {
   Alert,
+  Box,
   Button,
-  Checkbox,
-  FormControlLabel,
+  Chip,
+  Collapse,
+  Divider,
+  LinearProgress,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Typography
 } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../../api";
 import { EmptyState } from "../../components/common";
 import type { WorkspaceEntry, WorkspaceFile, WorkspaceList } from "../../types";
-import { WorkspaceCreatePane } from "./WorkspaceCreatePane";
 import { WorkspaceEditor } from "./WorkspaceEditor";
+import { buildWorkspaceTreeNodes, getParentPath, joinWorkspacePath } from "./workspaceTree";
 
-function parentPath(path: string): string {
-  const normalized = path.replace(/\/+$/, "");
-  const index = normalized.lastIndexOf("/");
-  return index > 0 ? normalized.slice(0, index) : "";
+type DirectoryState = {
+  entries: WorkspaceEntry[];
+  total: number;
+  loading: boolean;
+  loaded: boolean;
+  error: string | null;
+};
+
+type DirectoryStateMap = Record<string, DirectoryState>;
+
+function emptyDirectoryState(): DirectoryState {
+  return {
+    entries: [],
+    total: 0,
+    loading: false,
+    loaded: false,
+    error: null
+  };
+}
+
+function childNameForCreate(basePath: string, value: string): string {
+  const trimmed = value.trim().replace(/^\/+/, "");
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.includes("/") ? trimmed : joinWorkspacePath(basePath, trimmed);
 }
 
 export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
-  const [path, setPath] = useState("");
-  const [recursive, setRecursive] = useState(false);
-  const [list, setList] = useState<WorkspaceList | null>(null);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set([""]));
+  const [directories, setDirectories] = useState<DirectoryStateMap>({});
+  const [selectedPath, setSelectedPath] = useState("");
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [editorContent, setEditorContent] = useState("");
-  const [newFilePath, setNewFilePath] = useState("");
+  const [newFileName, setNewFileName] = useState("");
   const [newFileContent, setNewFileContent] = useState("");
-  const [newDirPath, setNewDirPath] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [newDirName, setNewDirName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function load(nextPath = path, nextOffset = 0) {
-    setLoading(true);
-    setError(null);
+  async function loadDirectory(path: string) {
+    setDirectories((current) => ({
+      ...current,
+      [path]: {
+        ...(current[path] ?? emptyDirectoryState()),
+        loading: true,
+        error: null
+      }
+    }));
     try {
-      const result = await api.workspaceList(sessionId, {
-        path: nextPath,
-        recursive,
-        limit: 100,
-        offset: nextOffset
+      const result: WorkspaceList = await api.workspaceList(sessionId, {
+        path,
+        recursive: false,
+        limit: 500,
+        offset: 0
       });
-      setList(result);
-      setPath(result.path);
+      setDirectories((current) => ({
+        ...current,
+        [path]: {
+          entries: result.entries,
+          total: result.total,
+          loading: false,
+          loaded: true,
+          error: null
+        }
+      }));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
-    } finally {
-      setLoading(false);
+      const message = loadError instanceof Error ? loadError.message : String(loadError);
+      setDirectories((current) => ({
+        ...current,
+        [path]: {
+          ...(current[path] ?? emptyDirectoryState()),
+          loading: false,
+          error: message
+        }
+      }));
+    }
+  }
+
+  async function toggleDirectory(path: string) {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (path !== "" && next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+    if (!directories[path]?.loaded && !directories[path]?.loading) {
+      await loadDirectory(path);
     }
   }
 
   async function readFile(entry: WorkspaceEntry) {
+    setSelectedPath(entry.path);
     setError(null);
     try {
       const file = await api.workspaceRead(sessionId, entry.path);
@@ -81,7 +135,7 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
       const refreshed = await api.workspaceRead(sessionId, selectedFile.path);
       setSelectedFile(refreshed);
       setEditorContent(refreshed.content ?? "");
-      await load(path);
+      await loadDirectory(getParentPath(selectedFile.path));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
     } finally {
@@ -90,7 +144,7 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   }
 
   async function createFile() {
-    const targetPath = newFilePath.trim();
+    const targetPath = childNameForCreate(getParentPath(selectedPath), newFileName);
     if (!targetPath) {
       return;
     }
@@ -99,11 +153,12 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
     try {
       await api.workspaceWrite(sessionId, targetPath, newFileContent, "create");
       const file = await api.workspaceRead(sessionId, targetPath);
+      setSelectedPath(targetPath);
       setSelectedFile(file);
       setEditorContent(file.content ?? "");
-      setNewFilePath("");
+      setNewFileName("");
       setNewFileContent("");
-      await load(parentPath(targetPath));
+      await loadDirectory(getParentPath(targetPath));
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
     } finally {
@@ -112,7 +167,7 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   }
 
   async function createDirectory() {
-    const targetPath = newDirPath.trim();
+    const targetPath = childNameForCreate(getParentPath(selectedPath), newDirName);
     if (!targetPath) {
       return;
     }
@@ -120,8 +175,10 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
     setError(null);
     try {
       await api.workspaceMkdir(sessionId, targetPath);
-      setNewDirPath("");
-      await load(parentPath(targetPath));
+      setNewDirName("");
+      setExpandedPaths((current) => new Set(current).add(targetPath));
+      await loadDirectory(getParentPath(targetPath));
+      await loadDirectory(targetPath);
     } catch (mkdirError) {
       setError(mkdirError instanceof Error ? mkdirError.message : String(mkdirError));
     } finally {
@@ -129,19 +186,19 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
     }
   }
 
-  async function trashEntry(entry: WorkspaceEntry) {
-    if (!window.confirm(`Переместить в .trash: ${entry.path}?`)) {
+  async function trashSelectedFile() {
+    if (!selectedFile || !window.confirm(`Переместить в .trash: ${selectedFile.path}?`)) {
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await api.workspaceTrash(sessionId, entry.path);
-      if (selectedFile?.path === entry.path) {
-        setSelectedFile(null);
-        setEditorContent("");
-      }
-      await load(path);
+      await api.workspaceTrash(sessionId, selectedFile.path);
+      const parent = getParentPath(selectedFile.path);
+      setSelectedFile(null);
+      setSelectedPath(parent);
+      setEditorContent("");
+      await loadDirectory(parent);
     } catch (trashError) {
       setError(trashError instanceof Error ? trashError.message : String(trashError));
     } finally {
@@ -153,125 +210,174 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
     window.open(api.workspaceDownloadUrl(sessionId, pathToDownload), "_blank", "noopener,noreferrer");
   }
 
+  function renderDirectory(path: string, depth = 0): ReactNode {
+    const state = directories[path] ?? emptyDirectoryState();
+    const nodes = buildWorkspaceTreeNodes(state.entries);
+
+    return (
+      <Box key={path || "root"}>
+        {state.loading ? <LinearProgress sx={{ my: 0.5 }} /> : null}
+        {state.error ? (
+          <Alert severity="error" sx={{ my: 0.75 }}>
+            {state.error}
+          </Alert>
+        ) : null}
+        {nodes.map((entry) => {
+          const isDirectory = entry.kind === "directory";
+          const isExpanded = expandedPaths.has(entry.path);
+          const isSelected = selectedPath === entry.path || selectedFile?.path === entry.path;
+
+          return (
+            <Box key={entry.path}>
+              <button
+                type="button"
+                className={`workspace-tree-row ${isSelected ? "is-selected" : ""}`}
+                style={{ paddingLeft: 10 + depth * 18 }}
+                onClick={() => {
+                  if (isDirectory) {
+                    setSelectedPath(entry.path);
+                    setSelectedFile(null);
+                    setEditorContent("");
+                    void toggleDirectory(entry.path);
+                  } else {
+                    void readFile(entry);
+                  }
+                }}
+              >
+                <span className="workspace-tree-icon">{isDirectory ? (isExpanded ? "▾" : "▸") : "•"}</span>
+                <span className="workspace-tree-name">{entry.label}</span>
+                <span className="workspace-tree-meta">{isDirectory ? "dir" : `${entry.bytes ?? 0} b`}</span>
+              </button>
+              {isDirectory ? (
+                <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                  {renderDirectory(entry.path, depth + 1)}
+                </Collapse>
+              ) : null}
+            </Box>
+          );
+        })}
+        {state.loaded && nodes.length === 0 ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", pl: 1.25, py: 0.75 }}>
+            Папка пуста
+          </Typography>
+        ) : null}
+      </Box>
+    );
+  }
+
   useEffect(() => {
+    setExpandedPaths(new Set([""]));
+    setDirectories({});
+    setSelectedPath("");
     setSelectedFile(null);
     setEditorContent("");
-    void load("");
+    void loadDirectory("");
   }, [sessionId]);
 
+  const rootState = directories[""] ?? emptyDirectoryState();
   const editorDirty = selectedFile ? (selectedFile.content ?? "") !== editorContent : false;
+  const currentBasePath = selectedFile ? getParentPath(selectedFile.path) : selectedPath;
 
   return (
     <Stack spacing={1.5}>
-      <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems="center">
-          <TextField
-            fullWidth
-            size="small"
-            label="Путь в workspace"
-            value={path}
-            onChange={(event) => setPath(event.target.value)}
-            placeholder="например: docs или scratch/browser"
-          />
-          <FormControlLabel
-            control={<Checkbox checked={recursive} onChange={(event) => setRecursive(event.target.checked)} />}
-            label="recursive"
-          />
-          <Button variant="outlined" onClick={() => void load(parentPath(path))}>
-            Вверх
-          </Button>
-          <Button variant="contained" onClick={() => void load(path)}>
-            Открыть
-          </Button>
-        </Stack>
-      </Paper>
-
       {error ? <Alert severity="error">{error}</Alert> : null}
 
-      <WorkspaceCreatePane
-        filePath={newFilePath}
-        fileContent={newFileContent}
-        dirPath={newDirPath}
-        saving={saving}
-        onFilePathChange={setNewFilePath}
-        onFileContentChange={setNewFileContent}
-        onDirPathChange={setNewDirPath}
-        onCreateFile={() => void createFile()}
-        onCreateDirectory={() => void createDirectory()}
-      />
+      <Box className="workspace-browser">
+        <Paper variant="outlined" className="workspace-tree-panel">
+          <Stack spacing={1.25}>
+            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+              <Typography fontWeight={700}>Workspace tree</Typography>
+              <Button variant="outlined" onClick={() => void loadDirectory("")}>
+                Обновить
+              </Button>
+            </Stack>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Chip label={`root items: ${rootState.total}`} variant="outlined" />
+              <Chip label={rootState.loading ? "loading" : "ready"} color={rootState.loading ? "info" : "default"} variant="outlined" />
+            </Stack>
+            <Divider />
+            {rootState.loaded && rootState.entries.length === 0 ? (
+              <EmptyState title="Workspace пуст" detail="Агент пока не создал файлы в workspace." />
+            ) : (
+              <Box className="workspace-tree">{renderDirectory("")}</Box>
+            )}
+          </Stack>
+        </Paper>
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Путь</TableCell>
-              <TableCell>Тип</TableCell>
-              <TableCell>Размер</TableCell>
-              <TableCell align="right">Действия</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {(list?.entries ?? []).map((entry) => (
-              <TableRow key={entry.path} hover>
-                <TableCell className="mono">{entry.path}</TableCell>
-                <TableCell>{entry.kind}</TableCell>
-                <TableCell>{entry.bytes ?? "—"}</TableCell>
-                <TableCell align="right">
-                  <Stack direction="row" spacing={1} justifyContent="flex-end">
-                    {entry.kind === "directory" ? (
-                      <>
-                        <Button size="small" variant="outlined" onClick={() => void load(entry.path)}>
-                          Открыть
-                        </Button>
-                        <Button size="small" color="error" variant="outlined" onClick={() => void trashEntry(entry)}>
-                          В .trash
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button size="small" variant="outlined" onClick={() => void readFile(entry)}>
-                          Открыть
-                        </Button>
-                        <Button size="small" variant="outlined" onClick={() => download(entry.path)}>
-                          Скачать
-                        </Button>
-                        <Button size="small" color="error" variant="outlined" onClick={() => void trashEntry(entry)}>
-                          В .trash
-                        </Button>
-                      </>
-                    )}
+        <Stack spacing={1.5} minWidth={0}>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Stack spacing={1.25}>
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={1} justifyContent="space-between">
+                <Box minWidth={0}>
+                  <Typography fontWeight={700}>Действия</Typography>
+                  <Typography variant="caption" color="text.secondary" className="mono">
+                    base: {currentBasePath || "."}
+                  </Typography>
+                </Box>
+                {selectedFile ? (
+                  <Stack direction="row" spacing={1}>
+                    <Button variant="outlined" onClick={() => download(selectedFile.path)}>
+                      Скачать
+                    </Button>
+                    <Button color="error" variant="outlined" disabled={saving} onClick={() => void trashSelectedFile()}>
+                      В .trash
+                    </Button>
                   </Stack>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!loading && (list?.entries ?? []).length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4}>
-                  <EmptyState title="Workspace пуст" detail="В этом пути нет файлов или директорий." />
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
-      </TableContainer>
+                ) : null}
+              </Stack>
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={1}>
+                <TextField
+                  fullWidth
+                  label="Новый файл"
+                  value={newFileName}
+                  onChange={(event) => setNewFileName(event.target.value)}
+                  placeholder="notes/todo.md или todo.md"
+                />
+                <Button variant="contained" disabled={saving || !newFileName.trim()} onClick={() => void createFile()}>
+                  Создать файл
+                </Button>
+              </Stack>
+              <TextField
+                fullWidth
+                multiline
+                minRows={3}
+                label="Содержимое нового файла"
+                value={newFileContent}
+                onChange={(event) => setNewFileContent(event.target.value)}
+                inputProps={{ className: "mono" }}
+              />
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={1}>
+                <TextField
+                  fullWidth
+                  label="Новая папка"
+                  value={newDirName}
+                  onChange={(event) => setNewDirName(event.target.value)}
+                  placeholder="notes"
+                />
+                <Button variant="outlined" disabled={saving || !newDirName.trim()} onClick={() => void createDirectory()}>
+                  Создать папку
+                </Button>
+              </Stack>
+            </Stack>
+          </Paper>
 
-      {list ? (
-        <Typography variant="caption" color="text.secondary" className="mono">
-          root={list.workspace_root} · total={list.total} · offset={list.offset} · next={list.next_offset ?? "none"}
-        </Typography>
-      ) : null}
-
-      {selectedFile ? (
-        <WorkspaceEditor
-          file={selectedFile}
-          content={editorContent}
-          dirty={editorDirty}
-          saving={saving}
-          onContentChange={setEditorContent}
-          onSave={() => void saveSelectedFile()}
-          onDownload={() => download(selectedFile.path)}
-        />
-      ) : null}
+          {selectedFile ? (
+            <WorkspaceEditor
+              file={selectedFile}
+              content={editorContent}
+              dirty={editorDirty}
+              saving={saving}
+              onContentChange={setEditorContent}
+              onSave={() => void saveSelectedFile()}
+              onDownload={() => download(selectedFile.path)}
+            />
+          ) : (
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <EmptyState title="Файл не выбран" detail="Выбери файл в дереве слева, чтобы посмотреть или отредактировать его." />
+            </Paper>
+          )}
+        </Stack>
+      </Box>
     </Stack>
   );
 }
