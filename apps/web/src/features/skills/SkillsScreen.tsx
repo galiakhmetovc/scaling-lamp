@@ -13,13 +13,13 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { EmptyState, SectionHeader } from "../../components/common";
 import type { SessionSkillStatus, SessionSummary } from "../../types";
-import { AgentProfileFilesEditor } from "./AgentProfileFilesEditor";
-import { SkillModesTable } from "./SkillModesTable";
+import { AgentPromptFilesEditor } from "./AgentPromptFilesEditor";
+import { AgentSkillCardsEditor } from "./AgentSkillCardsEditor";
 
-type SkillsTab = "activation" | "files";
+type SkillsTab = "skills" | "prompts";
 
 export function SkillsScreen({ selectedSession }: { selectedSession: SessionSummary | null }) {
-  const [tab, setTab] = useState<SkillsTab>("activation");
+  const [tab, setTab] = useState<SkillsTab>("skills");
   const [skills, setSkills] = useState<SessionSkillStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +66,7 @@ export function SkillsScreen({ selectedSession }: { selectedSession: SessionSumm
     <Stack spacing={2}>
       <SectionHeader
         title="Skills"
-        subtitle="Активация skills в выбранной сессии и редактирование файлов профиля агента через canonical agentd API."
+        subtitle="Skills управляются как карточки. SYSTEM.md и AGENTS.md редактируются отдельно как prompt-файлы профиля."
         action={
           <Button variant="outlined" disabled={loading || !selectedSession} onClick={() => void load()}>
             Обновить
@@ -88,19 +88,20 @@ export function SkillsScreen({ selectedSession }: { selectedSession: SessionSumm
           </Stack>
           <Paper variant="outlined">
             <Tabs value={tab} onChange={(_, value: SkillsTab) => setTab(value)} variant="scrollable" scrollButtons="auto">
-              <Tab value="activation" label="Активация" />
-              <Tab value="files" label="Файлы профиля" />
+              <Tab value="skills" label="Skills" />
+              <Tab value="prompts" label="SYSTEM / AGENTS" />
             </Tabs>
           </Paper>
           <Box>
-            {tab === "activation" ? (
-              <SkillModesTable
+            {tab === "skills" ? (
+              <AgentSkillCardsEditor
+                agentId={selectedSession.agent_profile_id}
                 skills={skills}
                 loading={loading}
                 onSetEnabled={(name, enabled) => void setSkillEnabled(name, enabled)}
               />
             ) : null}
-            {tab === "files" ? <AgentProfileFilesEditor agentId={selectedSession.agent_profile_id} /> : null}
+            {tab === "prompts" ? <AgentPromptFilesEditor agentId={selectedSession.agent_profile_id} /> : null}
           </Box>
         </>
       ) : (
