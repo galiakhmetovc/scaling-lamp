@@ -29,6 +29,11 @@ Web Console не является вторым агентным runtime.
 - workspace files: `GET /v1/sessions/{id}/workspace/list|read|download`, `POST /v1/sessions/{id}/workspace/write|mkdir|trash`;
 - artifact files: `GET /v1/sessions/{id}/artifact-files`;
 - session skills: `GET /v1/sessions/{id}/skills`, `POST /v1/sessions/{id}/skills/enable|disable`;
+- MCP: `GET /v1/mcp/connectors`, `PATCH /v1/mcp/connectors/{id}`, `POST /v1/mcp/connectors/{id}/restart`;
+- MCP resources/prompts: `GET /v1/mcp/resources`, `POST /v1/mcp/resources/read`, `GET /v1/mcp/prompts`, `POST /v1/mcp/prompts/get`;
+- semantic memory: `GET /v1/memory/semantic`, `POST /v1/memory/semantic/search`, `PATCH|DELETE /v1/memory/semantic/{id}`;
+- scoped KV: `GET|PUT|DELETE /v1/kv`;
+- recall preview: `POST /v1/memory/recall-preview`;
 - отправка сообщения: `POST /v1/chat/turn`;
 - создание сессии: `POST /v1/sessions`;
 - создание агента: `POST /v1/agents`.
@@ -140,6 +145,9 @@ Caddy должен проксировать:
 - файлы: просмотр workspace выбранной сессии, preview/download файлов, создание текстовых файлов и папок, редактирование текстовых файлов, перемещение в `.trash`;
 - artifact files: просмотр runtime artifacts, metadata, preview и download;
 - skills: просмотр навыков выбранной сессии и ручное enable/disable;
+- память: Mem0 semantic memory search/list/update/delete, scoped KV browse/put/delete, preview Memory Recall блока;
+- MCP: connectors, discovered resources/prompts и чтение resource/get prompt из UI;
+- operations: активные runs/tasks, event bus summary, delivery routes и Telegram inputs одним экраном;
 - routes: delivery targets и Telegram bindings;
 - traces: таблица trace links.
 
@@ -162,6 +170,8 @@ apps/web/src/
 ├── features/
 │   ├── chat/                       # основной рабочий чат
 │   ├── files/                      # workspace + artifacts
+│   ├── memory/                     # Mem0, KV, recall preview
+│   ├── operations/                 # active runs/tasks/routes/event bus
 │   ├── skills/                     # session skill activation
 │   ├── sessions/                   # timeline/transcript/debug/tasks/inspector
 │   ├── overview/
@@ -195,15 +205,15 @@ P1 — управляемость агентом:
 
 P2 — память и знания:
 
-1. Memory UI: semantic memory search/list/update/delete.
-2. KV UI: browse/edit/delete по scope (`operator`, `agent`, `workspace`, `session`).
-3. Recall preview: показать, что будет подмешано в prompt выбранной сессии.
-4. SilverBullet/knowledge boundary: явно показать, чем отличаются заметки, semantic memory и KV.
+1. Готово: Memory UI: semantic memory search/list/update/delete.
+2. Готово: KV UI: browse/put/delete по scope (`operator`, `agent`, `agent_shared`, `workspace`, `session`).
+3. Готово: Recall preview: показать, что будет подмешано в prompt выбранной сессии.
+4. Готово: SilverBullet/knowledge boundary: явно показать, чем отличаются заметки, semantic memory и KV.
 
 P3 — control-plane роя:
 
-1. MCP UI: connectors, состояние, tools/resources/prompts.
-2. Operations dashboard: очереди NATS, active runs, task registry, delivery routes.
+1. Готово: MCP UI: connectors, состояние, tools/resources/prompts.
+2. Готово: Operations dashboard: event bus streams, active runs, task registry, delivery routes.
 3. Mission/conductor builder: создать задачу, выбрать агента, delivery target, follow/cancel.
 4. Reports/inbox: checkpoints, blockers, handoff, ready-for-human.
 

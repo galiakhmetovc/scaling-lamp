@@ -2,6 +2,9 @@ import {
   Alert,
   Button,
   Chip,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Paper,
   Stack,
   Tab,
@@ -10,14 +13,28 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
-import { Metric, SectionHeader } from "../../components/common";
-import type { AgentDetail, McpConnector, SessionSummary, ToolCallSummary, ToolCatalog } from "../../types";
+import { JsonBlock, Metric, SectionHeader } from "../../components/common";
+import type {
+  AgentDetail,
+  McpConnector,
+  McpPrompt,
+  McpPromptGet,
+  McpPromptList,
+  McpResource,
+  McpResourceList,
+  McpResourceRead,
+  SessionSummary,
+  ToolCallSummary,
+  ToolCatalog
+} from "../../types";
 import { ToolsTable } from "./ToolsTable";
 import { McpConnectorsTable } from "./McpConnectorsTable";
+import { McpPromptsTable } from "./McpPromptsTable";
+import { McpResourcesTable } from "./McpResourcesTable";
 import { ToolCatalogTable } from "./ToolCatalogTable";
 import { summarizeToolCatalog } from "./toolCatalog";
 
-type ToolsTab = "catalog" | "calls" | "mcp";
+type ToolsTab = "catalog" | "calls" | "mcp" | "resources" | "prompts";
 
 export function ToolsScreen({
   selectedSession,
@@ -33,6 +50,9 @@ export function ToolsScreen({
   const [tab, setTab] = useState<ToolsTab>("catalog");
   const [catalog, setCatalog] = useState<ToolCatalog | null>(null);
   const [connectors, setConnectors] = useState<McpConnector[]>([]);
+  const [resources, setResources] = useState<McpResourceList | null>(null);
+  const [prompts, setPrompts] = useState<McpPromptList | null>(null);
+  const [mcpDetail, setMcpDetail] = useState<McpResourceRead | McpPromptGet | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyConnectorId, setBusyConnectorId] = useState<string | null>(null);
@@ -47,8 +67,14 @@ export function ToolsScreen({
         api.mcpConnectors(signal),
         selectedSession ? api.agentDetail(selectedSession.agent_profile_id, signal) : Promise.resolve(null)
       ]);
+      const [nextResources, nextPrompts] = await Promise.all([
+        api.mcpResources({ limit: 50 }, signal),
+        api.mcpPrompts({ limit: 50 }, signal)
+      ]);
       setCatalog(nextCatalog);
       setConnectors(nextConnectors);
+      setResources(nextResources);
+      setPrompts(nextPrompts);
       setAgent(nextAgent);
     } catch (loadError) {
       if (!signal?.aborted) {
@@ -87,6 +113,24 @@ export function ToolsScreen({
     }
   }
 
+  async function readResource(resource: McpResource) {
+    setError(null);
+    try {
+      setMcpDetail(await api.mcpReadResource(resource.connector_id, resource.uri));
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : String(readError));
+    }
+  }
+
+  async function getPrompt(prompt: McpPrompt) {
+    setError(null);
+    try {
+      setMcpDetail(await api.mcpGetPrompt(prompt.connector_id, prompt.name));
+    } catch (promptError) {
+      setError(promptError instanceof Error ? promptError.message : String(promptError));
+    }
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
@@ -112,6 +156,8 @@ export function ToolsScreen({
         <Metric label="Risk" value={stats.destructive} hint="destructive tools" />
         <Metric label="Unavailable" value={stats.unavailable} hint="disabled by runtime config" />
         <Metric label="MCP connectors" value={connectors.length} hint={`${connectors.filter((connector) => connector.enabled).length} enabled`} />
+        <Metric label="MCP resources" value={resources?.total_results ?? 0} hint={`${resources?.results.length ?? 0} on page`} />
+        <Metric label="MCP prompts" value={prompts?.total_results ?? 0} hint={`${prompts?.results.length ?? 0} on page`} />
       </Stack>
       <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ xs: "stretch", md: "center" }}>
@@ -135,6 +181,8 @@ export function ToolsScreen({
           <Tab value="catalog" label="Catalog" />
           <Tab value="calls" label="Recent calls" />
           <Tab value="mcp" label="MCP connectors" />
+          <Tab value="resources" label="MCP resources" />
+          <Tab value="prompts" label="MCP prompts" />
         </Tabs>
       </Paper>
 
@@ -148,6 +196,13 @@ export function ToolsScreen({
           onRestart={(connector) => void restartConnector(connector)}
         />
       ) : null}
+      {tab === "resources" ? <McpResourcesTable resources={resources} onRead={(resource) => void readResource(resource)} /> : null}
+      {tab === "prompts" ? <McpPromptsTable prompts={prompts} onGet={(prompt) => void getPrompt(prompt)} /> : null}
+
+      <Dialog open={Boolean(mcpDetail)} onClose={() => setMcpDetail(null)} fullWidth maxWidth="lg">
+        <DialogTitle>MCP detail</DialogTitle>
+        <DialogContent>{mcpDetail ? <JsonBlock value={mcpDetail} /> : null}</DialogContent>
+      </Dialog>
     </Stack>
   );
 }

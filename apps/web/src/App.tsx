@@ -7,7 +7,9 @@ import { CreateSessionDialog } from "./components/CreateSessionDialog";
 import { AgentsScreen } from "./features/agents/AgentsScreen";
 import { ChatScreen } from "./features/chat/ChatScreen";
 import { FilesScreen } from "./features/files/FilesScreen";
+import { MemoryScreen } from "./features/memory/MemoryScreen";
 import { MeshScreen } from "./features/mesh/MeshScreen";
+import { OperationsScreen } from "./features/operations/OperationsScreen";
 import { OverviewScreen } from "./features/overview/OverviewScreen";
 import { RoutesView } from "./features/routes/RoutesView";
 import { SessionsScreen } from "./features/sessions/SessionsScreen";
@@ -304,12 +306,20 @@ export function App() {
       setSection("tasks");
       return;
     }
+    if (command.id === "open-operations") {
+      setSection("operations");
+      return;
+    }
     if (command.id === "open-tools") {
       setSection("tools");
       return;
     }
     if (command.id === "open-files") {
       setSection("files");
+      return;
+    }
+    if (command.id === "open-memory") {
+      setSection("memory");
       return;
     }
     if (command.id === "open-skills") {
@@ -329,7 +339,7 @@ export function App() {
       return;
     }
     if (command.id === "send-help") {
-      setNotice("Команды web: /new, /sessions, /status, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /skills, /tools, /debug.");
+      setNotice("Команды web: /new, /sessions, /status, /ops, /approve, /stop, /cancel, /autoapprove, /compact, /model, /think, /rename, /plan, /files, /memory, /skills, /tools, /debug.");
       return;
     }
     if (!selectedSessionId) {
@@ -490,6 +500,18 @@ export function App() {
             onRefresh={() => void loadData()}
           />
         );
+      case "operations":
+        return (
+          <OperationsScreen
+            snapshot={snapshot}
+            loading={loading}
+            onRefresh={() => void loadData()}
+            onOpenSession={(sessionId) => {
+              setSelectedSessionId(sessionId);
+              setSection("chat");
+            }}
+          />
+        );
       case "mesh":
         return (
           <MeshScreen
@@ -578,6 +600,8 @@ export function App() {
         );
       case "files":
         return <FilesScreen selectedSession={selectedSession} />;
+      case "memory":
+        return <MemoryScreen selectedSession={selectedSession} />;
       case "skills":
         return <SkillsScreen selectedSession={selectedSession} />;
       case "agents":

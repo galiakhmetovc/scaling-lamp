@@ -6,8 +6,16 @@ import type {
   AgentUpdatePatch,
   ArtifactFile,
   ArtifactFileSummary,
+  KvList,
+  MemoryRecallPreview,
   McpConnector,
+  McpPromptGet,
+  McpPromptList,
+  McpResourceList,
+  McpResourceRead,
   PendingApproval,
+  SemanticMemoryList,
+  SemanticMemorySearch,
   SessionDebug,
   SessionPreferencesPatch,
   SessionSkillStatus,
@@ -69,6 +77,156 @@ export const api = {
   },
   mcpConnectors(signal?: AbortSignal) {
     return requestJson<McpConnector[]>(endpoint("/v1/mcp/connectors"), { signal });
+  },
+  mcpResources(options: { connectorId?: string; query?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) {
+    return requestJson<McpResourceList>(
+      endpoint(
+        `/v1/mcp/resources${queryString({
+          connector_id: options.connectorId ?? "",
+          query: options.query ?? "",
+          limit: options.limit ?? 50,
+          offset: options.offset ?? 0
+        })}`
+      ),
+      { signal }
+    );
+  },
+  mcpReadResource(connectorId: string, uri: string) {
+    return requestJson<McpResourceRead>(endpoint("/v1/mcp/resources/read"), {
+      method: "POST",
+      body: JSON.stringify({ connector_id: connectorId, uri })
+    });
+  },
+  mcpPrompts(options: { connectorId?: string; query?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) {
+    return requestJson<McpPromptList>(
+      endpoint(
+        `/v1/mcp/prompts${queryString({
+          connector_id: options.connectorId ?? "",
+          query: options.query ?? "",
+          limit: options.limit ?? 50,
+          offset: options.offset ?? 0
+        })}`
+      ),
+      { signal }
+    );
+  },
+  mcpGetPrompt(connectorId: string, name: string, args?: Record<string, string>) {
+    return requestJson<McpPromptGet>(endpoint("/v1/mcp/prompts/get"), {
+      method: "POST",
+      body: JSON.stringify({ connector_id: connectorId, name, arguments: args ?? null })
+    });
+  },
+  semanticMemoryList(
+    sessionId: string,
+    options: { scope?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal
+  ) {
+    return requestJson<SemanticMemoryList>(
+      endpoint(
+        `/v1/memory/semantic${queryString({
+          session_id: sessionId,
+          scope: options.scope ?? "workspace",
+          limit: options.limit ?? 20,
+          offset: options.offset ?? 0
+        })}`
+      ),
+      { signal }
+    );
+  },
+  semanticMemorySearch(
+    sessionId: string,
+    options: { query: string; scope?: string; limit?: number; filters?: unknown },
+    signal?: AbortSignal
+  ) {
+    return requestJson<SemanticMemorySearch>(endpoint("/v1/memory/semantic/search"), {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        query: options.query,
+        scope: options.scope ?? "workspace",
+        limit: options.limit ?? 20,
+        filters: options.filters ?? null
+      }),
+      signal
+    });
+  },
+  semanticMemoryUpdate(memoryId: string, text: string, metadata: unknown = null) {
+    return requestJson<{ memory_id: string; updated: boolean }>(
+      endpoint(`/v1/memory/semantic/${encodeURIComponent(memoryId)}`),
+      {
+        method: "PATCH",
+        body: JSON.stringify({ text, metadata })
+      }
+    );
+  },
+  semanticMemoryDelete(memoryId: string) {
+    return requestJson<{ memory_id: string; deleted: boolean }>(
+      endpoint(`/v1/memory/semantic/${encodeURIComponent(memoryId)}`),
+      { method: "DELETE" }
+    );
+  },
+  kvList(
+    sessionId: string,
+    options: { scope?: string; prefix?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal
+  ) {
+    return requestJson<KvList>(
+      endpoint(
+        `/v1/kv${queryString({
+          session_id: sessionId,
+          scope: options.scope ?? "workspace",
+          prefix: options.prefix ?? "",
+          limit: options.limit ?? 50,
+          offset: options.offset ?? 0
+        })}`
+      ),
+      { signal }
+    );
+  },
+  kvPut(
+    sessionId: string,
+    input: {
+      key: string;
+      value: unknown;
+      scope?: string;
+      metadata?: unknown;
+      expected_revision?: number | null;
+      ttl_seconds?: number | null;
+    }
+  ) {
+    return requestJson<{ entry: unknown }>(endpoint("/v1/kv"), {
+      method: "PUT",
+      body: JSON.stringify({
+        session_id: sessionId,
+        key: input.key,
+        value: input.value,
+        scope: input.scope ?? "workspace",
+        metadata: input.metadata ?? null,
+        expected_revision: input.expected_revision ?? null,
+        ttl_seconds: input.ttl_seconds ?? null
+      })
+    });
+  },
+  kvDelete(sessionId: string, input: { key: string; scope?: string; expected_revision?: number | null }) {
+    return requestJson<{ key: string; deleted: boolean }>(endpoint("/v1/kv"), {
+      method: "DELETE",
+      body: JSON.stringify({
+        session_id: sessionId,
+        key: input.key,
+        scope: input.scope ?? "workspace",
+        expected_revision: input.expected_revision ?? null
+      })
+    });
+  },
+  memoryRecallPreview(sessionId: string, query?: string, signal?: AbortSignal) {
+    return requestJson<MemoryRecallPreview>(endpoint("/v1/memory/recall-preview"), {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: sessionId,
+        query: query || null
+      }),
+      signal
+    });
   },
   updateMcpConnector(
     connectorId: string,

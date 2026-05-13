@@ -3,8 +3,10 @@ export type ChatCommandId =
   | "refresh"
   | "open-sessions"
   | "open-status"
+  | "open-operations"
   | "open-tasks"
   | "open-files"
+  | "open-memory"
   | "open-skills"
   | "open-tools"
   | "open-debug"
@@ -54,6 +56,12 @@ export const chatCommands: ChatCommand[] = [
     detail: "развернуть правую панель состояния"
   },
   {
+    id: "open-operations",
+    command: "/ops",
+    title: "Operations",
+    detail: "открыть активные runs, tasks и routes"
+  },
+  {
     id: "approve",
     command: "/approve",
     title: "Approve",
@@ -100,6 +108,12 @@ export const chatCommands: ChatCommand[] = [
     command: "/files",
     title: "Файлы",
     detail: "открыть workspace и artifacts выбранной сессии"
+  },
+  {
+    id: "open-memory",
+    command: "/memory",
+    title: "Память",
+    detail: "открыть Mem0, KV и recall preview"
   },
   {
     id: "open-skills",

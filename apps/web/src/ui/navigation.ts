@@ -1,9 +1,11 @@
 export type SectionId =
   | "overview"
+  | "operations"
   | "mesh"
   | "chat"
   | "sessions"
   | "files"
+  | "memory"
   | "skills"
   | "agents"
   | "tasks"
@@ -14,10 +16,12 @@ export type SectionId =
 
 export const sections: Array<{ id: SectionId; label: string; description: string }> = [
   { id: "overview", label: "Обзор", description: "runtime, NATS, Postgres" },
+  { id: "operations", label: "Operations", description: "runs, tasks, routes" },
   { id: "mesh", label: "Mesh", description: "агенты, задачи, маршруты" },
   { id: "chat", label: "Чат", description: "основная работа" },
   { id: "sessions", label: "Сессии", description: "timeline и debug" },
   { id: "files", label: "Файлы", description: "workspace и artifacts" },
+  { id: "memory", label: "Память", description: "Mem0, KV, recall" },
   { id: "skills", label: "Skills", description: "активация навыков" },
   { id: "agents", label: "Агенты", description: "профили и workspaces" },
   { id: "tasks", label: "Задачи", description: "registry и делегации" },

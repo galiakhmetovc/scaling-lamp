@@ -3,6 +3,7 @@ mod agents;
 mod chat;
 mod disk;
 mod mcp;
+mod memory;
 mod sessions;
 mod status;
 mod telegram;
@@ -121,7 +122,29 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         (&tiny_http::Method::Post, "/v1/mcp/connectors") => {
             mcp::handle_create_mcp_connector(app, request)
         }
+        (&tiny_http::Method::Get, "/v1/mcp/resources") => {
+            mcp::handle_list_mcp_resources(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/mcp/resources/read") => {
+            mcp::handle_read_mcp_resource(app, request)
+        }
+        (&tiny_http::Method::Get, "/v1/mcp/prompts") => mcp::handle_list_mcp_prompts(app, request),
+        (&tiny_http::Method::Post, "/v1/mcp/prompts/get") => {
+            mcp::handle_get_mcp_prompt(app, request)
+        }
         (&tiny_http::Method::Get, "/v1/tools/catalog") => tools::handle_tool_catalog(app, request),
+        (&tiny_http::Method::Get, "/v1/memory/semantic") => {
+            memory::handle_semantic_memory_list(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/semantic/search") => {
+            memory::handle_semantic_memory_search(app, request)
+        }
+        (&tiny_http::Method::Post, "/v1/memory/recall-preview") => {
+            memory::handle_memory_recall_preview(app, request)
+        }
+        (&tiny_http::Method::Get, "/v1/kv") => memory::handle_kv_list(app, request),
+        (&tiny_http::Method::Put, "/v1/kv") => memory::handle_kv_put(app, request),
+        (&tiny_http::Method::Delete, "/v1/kv") => memory::handle_kv_delete(app, request),
         (&tiny_http::Method::Post, "/v1/memory/session-search") => {
             sessions::handle_memory_session_search(app, request)
         }
@@ -155,6 +178,9 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
         }
         _ if request.url().starts_with("/v1/mcp/connectors/") => {
             mcp::handle_mcp_connector_nested_routes(app, request)
+        }
+        _ if request.url().starts_with("/v1/memory/semantic/") => {
+            memory::handle_semantic_memory_nested_routes(app, request)
         }
         _ if request.url().starts_with("/v1/tasks/") => sessions::handle_task_routes(app, request),
         _ => sessions::handle_nested_routes(app, request),

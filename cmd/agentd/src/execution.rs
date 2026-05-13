@@ -52,8 +52,11 @@ use agent_runtime::run::{RunEngine, RunSnapshot, RunStatus, RunTransitionError};
 use agent_runtime::scheduler::{MissionVerificationSummary, SupervisorAction, SupervisorLoop};
 use agent_runtime::session::{Session, SessionSettings};
 use agent_runtime::tool::{
-    BrowserToolClient, SharedProcessRegistry, ToolCall, ToolError, ToolFamily, ToolName,
-    ToolRuntime, WebSearchBackend, WebToolClient,
+    BrowserToolClient, KvDeleteInput, KvDeleteOutput, KvListInput, KvListOutput, KvPutInput,
+    KvPutOutput, MemoryDeleteInput, MemoryDeleteOutput, MemoryListInput, MemoryListOutput,
+    MemorySearchInput, MemorySearchOutput, MemoryUpdateInput, MemoryUpdateOutput,
+    SharedProcessRegistry, ToolCall, ToolError, ToolFamily, ToolName, ToolRuntime,
+    WebSearchBackend, WebToolClient,
 };
 use agent_runtime::verification::EvidenceBundle;
 use agent_runtime::workspace::WorkspaceRef;
@@ -469,6 +472,67 @@ impl ExecutionService {
                 ),
             })
         }
+    }
+
+    pub fn semantic_memory_search_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &MemorySearchInput,
+    ) -> Result<MemorySearchOutput, ExecutionError> {
+        self.search_semantic_memory(store, session_id, input)
+    }
+
+    pub fn semantic_memory_list_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &MemoryListInput,
+    ) -> Result<MemoryListOutput, ExecutionError> {
+        self.list_semantic_memories(store, session_id, input)
+    }
+
+    pub fn semantic_memory_update(
+        &self,
+        input: &MemoryUpdateInput,
+    ) -> Result<MemoryUpdateOutput, ExecutionError> {
+        self.update_semantic_memory(input)
+    }
+
+    pub fn semantic_memory_delete(
+        &self,
+        input: &MemoryDeleteInput,
+    ) -> Result<MemoryDeleteOutput, ExecutionError> {
+        self.delete_semantic_memory(input)
+    }
+
+    pub fn kv_list_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &KvListInput,
+        now: i64,
+    ) -> Result<KvListOutput, ExecutionError> {
+        self.list_kv_entries(store, session_id, input, now)
+    }
+
+    pub fn kv_put_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &KvPutInput,
+        now: i64,
+    ) -> Result<KvPutOutput, ExecutionError> {
+        self.put_kv_entry(store, session_id, input, now)
+    }
+
+    pub fn kv_delete_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        input: &KvDeleteInput,
+    ) -> Result<KvDeleteOutput, ExecutionError> {
+        self.delete_kv_entry(store, session_id, input)
     }
 
     fn mirror_session_to_silverbullet_best_effort(

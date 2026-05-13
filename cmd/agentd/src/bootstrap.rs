@@ -4,6 +4,7 @@ mod delivery_ops;
 mod disk_ops;
 mod execution_ops;
 mod mcp_ops;
+mod memory_ops;
 mod session_ops;
 mod tool_ops;
 

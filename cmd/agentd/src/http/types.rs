@@ -6,7 +6,10 @@ use crate::bootstrap::{
 };
 use crate::execution::{ApprovalContinuationReport, ChatExecutionEvent, ChatTurnExecutionReport};
 use agent_runtime::delegation::{DelegateResultPackage, DelegateWriteScope};
+use agent_runtime::prompt::MemoryRecallItem;
+use agent_runtime::tool::{KvEntryOutput, MemoryItemOutput};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -398,6 +401,186 @@ pub struct MemoryRenderResponse {
     pub memory: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemoryItemResponse {
+    pub id: String,
+    pub memory: String,
+    pub score: Option<String>,
+    pub metadata: Value,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+impl From<MemoryItemOutput> for SemanticMemoryItemResponse {
+    fn from(item: MemoryItemOutput) -> Self {
+        Self {
+            id: item.id,
+            memory: item.memory,
+            score: item.score,
+            metadata: item.metadata,
+            user_id: item.user_id,
+            agent_id: item.agent_id,
+            app_id: item.app_id,
+            run_id: item.run_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemorySearchRequest {
+    pub session_id: String,
+    pub query: String,
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub filters: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemoryListResponse {
+    pub results: Vec<SemanticMemoryItemResponse>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemorySearchResponse {
+    pub query: String,
+    pub results: Vec<SemanticMemoryItemResponse>,
+    pub truncated: bool,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemoryUpdateRequest {
+    pub text: String,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticMemoryUpdateResponse {
+    pub memory_id: String,
+    pub updated: bool,
+    pub memory: Option<SemanticMemoryItemResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticMemoryDeleteResponse {
+    pub memory_id: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KvEntryResponse {
+    pub scope: String,
+    pub namespace_id: String,
+    pub key: String,
+    pub value: Value,
+    pub metadata: Value,
+    pub revision: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+impl From<KvEntryOutput> for KvEntryResponse {
+    fn from(entry: KvEntryOutput) -> Self {
+        Self {
+            scope: entry.scope,
+            namespace_id: entry.namespace_id,
+            key: entry.key,
+            value: entry.value,
+            metadata: entry.metadata,
+            revision: entry.revision,
+            created_at: entry.created_at,
+            updated_at: entry.updated_at,
+            expires_at: entry.expires_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KvListResponse {
+    pub results: Vec<KvEntryResponse>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KvPutRequest {
+    pub session_id: String,
+    pub key: String,
+    #[serde(default)]
+    pub value: Value,
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub metadata: Value,
+    pub expected_revision: Option<i64>,
+    pub ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KvPutResponse {
+    pub entry: KvEntryResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KvDeleteRequest {
+    pub session_id: String,
+    pub key: String,
+    pub scope: Option<String>,
+    pub expected_revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KvDeleteResponse {
+    pub key: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRecallPreviewRequest {
+    pub session_id: String,
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRecallItemResponse {
+    pub scope: String,
+    pub memory_id: String,
+    pub memory: String,
+    pub score: Option<String>,
+    pub source: Option<String>,
+}
+
+impl From<MemoryRecallItem> for MemoryRecallItemResponse {
+    fn from(item: MemoryRecallItem) -> Self {
+        Self {
+            scope: item.scope,
+            memory_id: item.memory_id,
+            memory: item.memory,
+            score: item.score,
+            source: item.source,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRecallPreviewResponse {
+    pub enabled: bool,
+    pub query: Option<String>,
+    pub items: Vec<MemoryRecallItemResponse>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRenderResponse {
     pub message: String,
@@ -534,6 +717,20 @@ pub struct McpConnectorUpdateRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpConnectorDetailResponse {
     pub connector: McpConnectorView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpResourceReadRequest {
+    pub connector_id: String,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptGetRequest {
+    pub connector_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl From<SessionSummary> for SessionSummaryResponse {

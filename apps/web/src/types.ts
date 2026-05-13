@@ -183,6 +183,78 @@ export type McpConnector = {
   runtime: McpConnectorRuntime;
 };
 
+export type McpResource = {
+  connector_id: string;
+  uri: string;
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  mime_type?: string | null;
+};
+
+export type McpResourceList = {
+  connector_id?: string | null;
+  query?: string | null;
+  results: McpResource[];
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  total_results: number;
+  next_offset?: number | null;
+};
+
+export type McpResourceRead = {
+  connector_id: string;
+  uri: string;
+  text: string;
+  contents: Array<{
+    kind: string;
+    uri: string;
+    mime_type?: string | null;
+    text?: string | null;
+    blob?: string | null;
+  }>;
+};
+
+export type McpPromptArgument = {
+  name: string;
+  description?: string | null;
+  required: boolean;
+};
+
+export type McpPrompt = {
+  connector_id: string;
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  arguments: McpPromptArgument[];
+};
+
+export type McpPromptList = {
+  connector_id?: string | null;
+  query?: string | null;
+  results: McpPrompt[];
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  total_results: number;
+  next_offset?: number | null;
+};
+
+export type McpPromptGet = {
+  connector_id: string;
+  name: string;
+  description?: string | null;
+  text: string;
+  messages: Array<{
+    role: string;
+    content_type: string;
+    text?: string | null;
+    uri?: string | null;
+    mime_type?: string | null;
+  }>;
+};
+
 export type DeliveryTarget = {
   target_id: string;
   kind: string;
@@ -299,6 +371,68 @@ export type SessionSkillStatus = {
   name: string;
   description: string;
   mode: string;
+};
+
+export type SemanticMemoryItem = {
+  id: string;
+  memory: string;
+  score?: string | null;
+  metadata: unknown;
+  user_id?: string | null;
+  agent_id?: string | null;
+  app_id?: string | null;
+  run_id?: string | null;
+};
+
+export type SemanticMemoryList = {
+  results: SemanticMemoryItem[];
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  total_results: number;
+  next_offset?: number | null;
+};
+
+export type SemanticMemorySearch = {
+  query: string;
+  results: SemanticMemoryItem[];
+  truncated: boolean;
+  limit: number;
+};
+
+export type KvEntry = {
+  scope: string;
+  namespace_id: string;
+  key: string;
+  value: unknown;
+  metadata: unknown;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+  expires_at?: number | null;
+};
+
+export type KvList = {
+  results: KvEntry[];
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  next_offset?: number | null;
+};
+
+export type MemoryRecallItem = {
+  scope: string;
+  memory_id: string;
+  memory: string;
+  score?: string | null;
+  source?: string | null;
+};
+
+export type MemoryRecallPreview = {
+  enabled: boolean;
+  query?: string | null;
+  items: MemoryRecallItem[];
+  truncated: boolean;
 };
 
 export type SessionPreferencesPatch = {

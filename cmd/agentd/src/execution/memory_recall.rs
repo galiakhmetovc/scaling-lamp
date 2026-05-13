@@ -7,6 +7,38 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 
 impl ExecutionService {
+    pub fn preview_memory_recall_for_session(
+        &self,
+        store: &PersistenceStore,
+        session_id: &str,
+        query: Option<&str>,
+    ) -> Result<Option<MemoryRecall>, ExecutionError> {
+        if !self.memory_recall_should_run() {
+            return Ok(None);
+        }
+
+        let session = self.load_session(store, session_id)?;
+        let resolved_query = match query.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(query) => truncate_chars(query, self.config.memory_recall.max_query_chars),
+            None => {
+                let transcripts = store
+                    .list_transcripts_for_session(session_id)
+                    .map_err(ExecutionError::Store)?;
+                let Some(query) = latest_user_memory_recall_query(
+                    &transcripts,
+                    self.config.memory_recall.max_query_chars,
+                ) else {
+                    return Ok(None);
+                };
+                query
+            }
+        };
+
+        self.execute_memory_recall_for_prompt(store, &session, resolved_query.as_str())
+            .map(Some)
+            .map_err(|(error, _scope_errors)| error)
+    }
+
     pub(super) fn memory_recall_for_prompt(
         &self,
         store: &PersistenceStore,

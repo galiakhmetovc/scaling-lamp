@@ -1,7 +1,11 @@
 use super::{App, BootstrapError, unix_timestamp};
-use crate::mcp::McpConnectorRuntimeStatus;
+use crate::mcp::{
+    McpConnectorRuntimeStatus, McpDiscoveredPrompt, McpDiscoveredPromptArgument,
+    McpDiscoveredResource,
+};
 use agent_persistence::{McpConnectorRecord, McpRepository};
 use agent_runtime::mcp::{McpConnectorConfig, McpConnectorTransport};
+use agent_runtime::tool::{McpGetPromptOutput, McpReadResourceOutput};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -36,6 +40,56 @@ pub struct McpConnectorView {
     pub created_at: i64,
     pub updated_at: i64,
     pub runtime: McpConnectorRuntimeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpResourceView {
+    pub connector_id: String,
+    pub uri: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpResourceListView {
+    pub connector_id: Option<String>,
+    pub query: Option<String>,
+    pub results: Vec<McpResourceView>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptArgumentView {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptView {
+    pub connector_id: String,
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub arguments: Vec<McpPromptArgumentView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPromptListView {
+    pub connector_id: Option<String>,
+    pub query: Option<String>,
+    pub results: Vec<McpPromptView>,
+    pub truncated: bool,
+    pub offset: usize,
+    pub limit: usize,
+    pub total_results: usize,
+    pub next_offset: Option<usize>,
 }
 
 impl App {
@@ -224,6 +278,134 @@ impl App {
         Ok(deleted)
     }
 
+    pub fn list_mcp_resources(
+        &self,
+        connector_id: Option<&str>,
+        query: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> McpResourceListView {
+        let query = normalized_optional_query(query);
+        let query_lower = query.as_ref().map(|value| value.to_ascii_lowercase());
+        let mut results = self
+            .mcp
+            .list_discovered_resources(connector_id)
+            .into_iter()
+            .filter(|resource| {
+                query_lower.as_ref().is_none_or(|needle| {
+                    resource.uri.to_ascii_lowercase().contains(needle)
+                        || resource.name.to_ascii_lowercase().contains(needle)
+                        || resource
+                            .title
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || resource
+                            .description
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || resource
+                            .mime_type
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                })
+            })
+            .map(McpResourceView::from)
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| {
+            left.connector_id
+                .cmp(&right.connector_id)
+                .then_with(|| left.uri.cmp(&right.uri))
+        });
+        let (offset, limit, next_offset) = self.mcp_pagination(results.len(), limit, offset);
+        let end = offset.saturating_add(limit).min(results.len());
+        let page = results[offset..end].to_vec();
+        McpResourceListView {
+            connector_id: connector_id.map(str::to_string),
+            query,
+            results: page,
+            truncated: next_offset.is_some(),
+            offset,
+            limit,
+            total_results: results.len(),
+            next_offset,
+        }
+    }
+
+    pub fn read_mcp_resource(
+        &self,
+        connector_id: &str,
+        uri: &str,
+    ) -> Result<McpReadResourceOutput, BootstrapError> {
+        self.mcp
+            .read_resource(connector_id, uri)
+            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error)))
+    }
+
+    pub fn list_mcp_prompts(
+        &self,
+        connector_id: Option<&str>,
+        query: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> McpPromptListView {
+        let query = normalized_optional_query(query);
+        let query_lower = query.as_ref().map(|value| value.to_ascii_lowercase());
+        let mut results = self
+            .mcp
+            .list_discovered_prompts(connector_id)
+            .into_iter()
+            .filter(|prompt| {
+                query_lower.as_ref().is_none_or(|needle| {
+                    prompt.name.to_ascii_lowercase().contains(needle)
+                        || prompt
+                            .title
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || prompt
+                            .description
+                            .as_ref()
+                            .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+                        || prompt.arguments.iter().any(|argument| {
+                            argument.name.to_ascii_lowercase().contains(needle)
+                                || argument.description.as_ref().is_some_and(|value| {
+                                    value.to_ascii_lowercase().contains(needle)
+                                })
+                        })
+                })
+            })
+            .map(McpPromptView::from)
+            .collect::<Vec<_>>();
+        results.sort_by(|left, right| {
+            left.connector_id
+                .cmp(&right.connector_id)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let (offset, limit, next_offset) = self.mcp_pagination(results.len(), limit, offset);
+        let end = offset.saturating_add(limit).min(results.len());
+        let page = results[offset..end].to_vec();
+        McpPromptListView {
+            connector_id: connector_id.map(str::to_string),
+            query,
+            results: page,
+            truncated: next_offset.is_some(),
+            offset,
+            limit,
+            total_results: results.len(),
+            next_offset,
+        }
+    }
+
+    pub fn get_mcp_prompt(
+        &self,
+        connector_id: &str,
+        name: &str,
+        arguments: Option<BTreeMap<String, String>>,
+    ) -> Result<McpGetPromptOutput, BootstrapError> {
+        self.mcp
+            .get_prompt(connector_id, name, arguments)
+            .map_err(|error| BootstrapError::Stream(std::io::Error::other(error)))
+    }
+
     pub fn render_mcp_connectors(&self) -> Result<String, BootstrapError> {
         Ok(render_mcp_connectors_view(&self.list_mcp_connectors()?))
     }
@@ -250,6 +432,61 @@ impl App {
             updated_at: connector.updated_at,
             runtime: self.mcp.status(&connector.id),
         })
+    }
+
+    fn mcp_pagination(
+        &self,
+        total: usize,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> (usize, usize, Option<usize>) {
+        let offset = offset.unwrap_or(0);
+        let limit = limit
+            .unwrap_or(self.config.runtime_limits.mcp_search_default_limit)
+            .clamp(1, self.config.runtime_limits.mcp_search_max_limit);
+        let offset = offset.min(total);
+        let next = offset.saturating_add(limit);
+        let next_offset = (next < total).then_some(next);
+        (offset, limit, next_offset)
+    }
+}
+
+impl From<McpDiscoveredResource> for McpResourceView {
+    fn from(resource: McpDiscoveredResource) -> Self {
+        Self {
+            connector_id: resource.connector_id,
+            uri: resource.uri,
+            name: resource.name,
+            title: resource.title,
+            description: resource.description,
+            mime_type: resource.mime_type,
+        }
+    }
+}
+
+impl From<McpDiscoveredPromptArgument> for McpPromptArgumentView {
+    fn from(argument: McpDiscoveredPromptArgument) -> Self {
+        Self {
+            name: argument.name,
+            description: argument.description,
+            required: argument.required,
+        }
+    }
+}
+
+impl From<McpDiscoveredPrompt> for McpPromptView {
+    fn from(prompt: McpDiscoveredPrompt) -> Self {
+        Self {
+            connector_id: prompt.connector_id,
+            name: prompt.name,
+            title: prompt.title,
+            description: prompt.description,
+            arguments: prompt
+                .arguments
+                .into_iter()
+                .map(McpPromptArgumentView::from)
+                .collect(),
+        }
     }
 }
 
@@ -357,4 +594,11 @@ fn render_mcp_env(env: &BTreeMap<String, String>) -> String {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn normalized_optional_query(query: Option<&str>) -> Option<String> {
+    query
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
