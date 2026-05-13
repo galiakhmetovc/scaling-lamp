@@ -1,7 +1,8 @@
 use agent_persistence::{
     AppConfig, DeliveryRepository, DeliveryTargetRecord, EventRepository, PersistenceStore,
     RouterRepository, RouterRuleRecord, SessionOutputRouteRecord, SessionRecord, SessionRepository,
-    TaskRegistryRepository, TelegramChatBindingRecord, TelegramRepository, TranscriptRepository,
+    TaskRegistryRepository, TelegramChatBindingRecord, TelegramRepository,
+    TelegramUserPairingRecord, TranscriptRepository,
 };
 use agent_runtime::provider::{ConfiguredProvider, ProviderKind};
 use agent_runtime::session::SessionSettings;
@@ -219,6 +220,56 @@ fn telegram_binding_materializes_compat_route_when_router_rule_is_missing() {
     );
 }
 
+#[test]
+fn telegram_private_inbound_without_binding_bootstraps_session_and_route() {
+    let (_temp, app) = test_app("http://127.0.0.1:9");
+    let store = store(&app);
+    seed_activated_pairing(&store);
+
+    let webhook = handle_webhook_update(&app, "secret", &telegram_update(903, "fresh hello"), 500)
+        .expect("webhook");
+    let input_outbox = store
+        .get_event_outbox(webhook.outbox_id.as_deref().expect("input outbox id"))
+        .expect("input outbox")
+        .expect("input outbox exists");
+    let input_envelope = serde_json::from_str(&input_outbox.payload_json).expect("input envelope");
+
+    let route = route_input_event_envelope(&app, input_envelope, 501).expect("route envelope");
+
+    assert_eq!(route.agent_id, "default");
+    assert_eq!(route.output_targets, vec!["telegram-42"]);
+    assert_eq!(count_rows(&app, "sessions"), 1);
+
+    let binding = store
+        .get_telegram_chat_binding(42)
+        .expect("binding")
+        .expect("binding exists");
+    assert_eq!(binding.owner_telegram_user_id, Some(7));
+    assert_eq!(
+        binding.selected_session_id.as_deref(),
+        Some(route.session_id.as_str())
+    );
+
+    assert!(
+        store
+            .get_delivery_target("telegram-42")
+            .expect("target")
+            .is_some()
+    );
+    assert!(
+        store
+            .get_session_output_route(&format!("route-{}-telegram-42", route.session_id))
+            .expect("output route")
+            .is_some()
+    );
+    assert!(
+        store
+            .get_router_rule("rule-telegram-binding-42")
+            .expect("router rule")
+            .is_some()
+    );
+}
+
 fn test_app(provider_api_base: &str) -> (tempfile::TempDir, bootstrap::App) {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut config = AppConfig {
@@ -311,6 +362,22 @@ fn seed_session_and_telegram_binding(store: &PersistenceStore) {
             updated_at: 100,
         })
         .expect("put binding");
+}
+
+fn seed_activated_pairing(store: &PersistenceStore) {
+    store
+        .put_telegram_user_pairing(&TelegramUserPairingRecord {
+            token: "pair-activated".to_string(),
+            telegram_user_id: 7,
+            telegram_chat_id: 42,
+            telegram_username: Some("operator".to_string()),
+            telegram_display_name: "Operator".to_string(),
+            status: "activated".to_string(),
+            created_at: 100,
+            expires_at: 200,
+            activated_at: Some(101),
+        })
+        .expect("put pairing");
 }
 
 fn seed_session(store: &PersistenceStore) {

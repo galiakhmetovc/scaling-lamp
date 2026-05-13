@@ -15,8 +15,8 @@ use crate::telegram::event_delivery::TelegramEventDeliverySender;
 use crate::telegram::router::TelegramWorker;
 use agent_persistence::{
     DeliveryRepository, DeliveryTargetRecord, EventRepository, PersistenceStore, RouterRepository,
-    RouterRuleRecord, SessionOutputRouteRecord, StoreError, TelegramRepository,
-    audit::AuditLogConfig,
+    RouterRuleRecord, SessionOutputRouteRecord, StoreError, TelegramChatBindingRecord,
+    TelegramRepository, audit::AuditLogConfig,
 };
 use async_nats::jetstream::Message as JetStreamMessage;
 use futures_util::StreamExt;
@@ -648,11 +648,20 @@ fn ensure_telegram_binding_route(
         return Ok(());
     };
     let store = app.store().map_err(|error| error.to_string())?;
-    let Some(binding) = store
+    let binding = match store
         .get_telegram_chat_binding(chat_id)
         .map_err(|error| error.to_string())?
-    else {
-        return Ok(());
+    {
+        Some(binding) if binding.selected_session_id.is_some() => binding,
+        existing => {
+            let Some(binding) = materialize_telegram_private_binding(
+                app, &store, &payload, chat_id, existing, now,
+            )?
+            else {
+                return Ok(());
+            };
+            binding
+        }
     };
     let Some(session_id) = binding.selected_session_id.as_deref() else {
         return Ok(());
@@ -737,6 +746,107 @@ fn ensure_telegram_binding_route(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn materialize_telegram_private_binding(
+    app: &App,
+    store: &PersistenceStore,
+    payload: &Value,
+    chat_id: i64,
+    existing: Option<TelegramChatBindingRecord>,
+    now: i64,
+) -> Result<Option<TelegramChatBindingRecord>, String> {
+    if !app.config.telegram.private_chat_auto_create_session {
+        return Ok(None);
+    }
+    if payload
+        .get("chat_type")
+        .and_then(Value::as_str)
+        .is_some_and(|chat_type| chat_type != "private")
+    {
+        return Ok(None);
+    }
+    let Some(telegram_user_id) = payload.get("telegram_user_id").and_then(Value::as_i64) else {
+        return Ok(None);
+    };
+    let Some(pairing) = store
+        .get_telegram_user_pairing_by_user_id(telegram_user_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    if pairing.status != "activated" {
+        return Ok(None);
+    }
+
+    let default_agent_profile_id = existing
+        .as_ref()
+        .and_then(|record| record.default_agent_profile_id.clone());
+    let title = telegram_private_session_title(payload, chat_id);
+    let session = app
+        .create_session_auto_for_agent(Some(&title), default_agent_profile_id.as_deref())
+        .map_err(|error| error.to_string())?;
+    let binding = TelegramChatBindingRecord {
+        telegram_chat_id: chat_id,
+        scope: "private".to_string(),
+        owner_telegram_user_id: Some(telegram_user_id),
+        selected_session_id: Some(session.id),
+        default_agent_profile_id,
+        last_delivered_transcript_created_at: existing
+            .as_ref()
+            .and_then(|record| record.last_delivered_transcript_created_at)
+            .or(Some(0)),
+        last_delivered_transcript_id: existing
+            .as_ref()
+            .and_then(|record| record.last_delivered_transcript_id.clone())
+            .or_else(|| Some(String::new())),
+        inbound_queue_mode: existing
+            .as_ref()
+            .map(|record| record.inbound_queue_mode.clone())
+            .unwrap_or_else(|| app.config.telegram.inbound_queue_default_mode.clone()),
+        inbound_coalesce_window_ms: existing
+            .as_ref()
+            .and_then(|record| record.inbound_coalesce_window_ms),
+        created_at: existing
+            .as_ref()
+            .map(|record| record.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    };
+    store
+        .put_telegram_chat_binding(&binding)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(binding))
+}
+
+fn telegram_private_session_title(payload: &Value, chat_id: i64) -> String {
+    if let Some(username) = payload
+        .get("telegram_username")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("Telegram @{}", username.trim());
+    }
+    let first_name = payload
+        .get("telegram_first_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let last_name = payload
+        .get("telegram_last_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let display_name = [first_name, last_name]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if display_name.is_empty() {
+        format!("Telegram chat {chat_id}")
+    } else {
+        format!("Telegram {display_name}")
+    }
 }
 
 fn numeric_id_token(id: i64) -> String {
