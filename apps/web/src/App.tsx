@@ -430,6 +430,7 @@ export function App() {
             selectedSession={selectedSession}
             selectedSessionId={selectedSessionId}
             transcript={transcript}
+            debug={debug}
             tasks={tasks}
             tools={snapshot?.recent_tool_calls ?? []}
             run={run}

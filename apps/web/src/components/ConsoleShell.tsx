@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   AppBar,
   Box,
+  Button,
   Chip,
   CircularProgress,
   CssBaseline,
@@ -38,12 +39,17 @@ export function ConsoleShell({
   children: ReactNode;
   onSectionChange: (section: SectionId) => void;
 }) {
+  const [navigationCollapsed, setNavigationCollapsed] = useState(false);
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box className="app-shell">
+      <Box className={`app-shell ${navigationCollapsed ? "app-shell-nav-collapsed" : ""}`}>
         <AppBar position="fixed" color="default" elevation={0} sx={{ zIndex: (muiTheme) => muiTheme.zIndex.drawer + 1 }}>
           <Toolbar variant="dense" sx={{ gap: 1.5 }}>
+            <Button variant="outlined" onClick={() => setNavigationCollapsed((current) => !current)}>
+              {navigationCollapsed ? "Показать навигацию" : "Скрыть навигацию"}
+            </Button>
             <Typography variant="h6" sx={{ flexGrow: 1 }}>
               teamD Web Console
             </Typography>
@@ -58,7 +64,7 @@ export function ConsoleShell({
           </Toolbar>
         </AppBar>
 
-        <Box component="nav" className="sidebar" sx={{ width: drawerWidth }}>
+        <Box component="nav" className="sidebar" sx={{ width: drawerWidth }} aria-hidden={navigationCollapsed}>
           <Toolbar variant="dense" />
           <Box sx={{ p: 1.25 }}>
             <List dense disablePadding>
@@ -93,7 +99,7 @@ export function ConsoleShell({
           </Box>
         </Box>
 
-        <Box component="main" className="main-panel" sx={{ ml: `${drawerWidth}px` }}>
+        <Box component="main" className="main-panel" sx={{ ml: navigationCollapsed ? 0 : `${drawerWidth}px` }}>
           <Toolbar variant="dense" />
           {loading && !snapshot ? <LinearProgress sx={{ mb: 2 }} /> : null}
           {children}

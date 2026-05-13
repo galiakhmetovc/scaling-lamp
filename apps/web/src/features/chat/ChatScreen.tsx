@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, Chip, Divider, LinearProgress, Paper, Stack, TextField, Typography } from "@mui/material";
-import { EmptyState, KeyValueTable, StatusChip } from "../../components/common";
+import { EmptyState } from "../../components/common";
 import { MarkdownMessage } from "../../components/MarkdownMessage";
 import type {
   PendingApproval,
   PendingChatMessage,
+  SessionDebug,
   SessionSummary,
   SessionTask,
   SessionTranscript,
@@ -13,8 +14,11 @@ import type {
 } from "../../types";
 import { formatTime, short } from "../../utils/format";
 import { SessionsTable } from "../sessions/SessionsTable";
+import { ChatMessageToolStats } from "./ChatMessageToolStats";
+import { ChatStatusPanel } from "./ChatStatusPanel";
 import { ChatWorkStatus } from "./ChatWorkStatus";
 import { chatCommands, filterChatCommands, type ChatCommand } from "./chatCommands";
+import { buildToolStats, isLowSignalChatLine } from "./toolStats";
 
 type VisibleMessage = TranscriptLine & {
   pending_id?: string;
@@ -27,6 +31,7 @@ export function ChatScreen({
   selectedSession,
   selectedSessionId,
   transcript,
+  debug,
   tasks,
   tools,
   run,
@@ -58,6 +63,7 @@ export function ChatScreen({
   selectedSession: SessionSummary | null;
   selectedSessionId: string | null;
   transcript: SessionTranscript | null;
+  debug: SessionDebug | null;
   tasks: SessionTask[];
   tools: ToolCallSummary[];
   run: unknown;
@@ -87,9 +93,10 @@ export function ChatScreen({
 }) {
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const visibleMessages = useMemo<VisibleMessage[]>(() => {
-    const transcriptMessages = (transcript?.entries ?? []).filter((entry) => !entry.tool_name);
+    const transcriptMessages = (transcript?.entries ?? []).filter((entry) => !isLowSignalChatLine(entry));
     const selectedPendingMessages = pendingMessages
       .filter((entry) => entry.session_id === selectedSessionId)
       .filter((entry) => {
@@ -111,9 +118,11 @@ export function ChatScreen({
       }));
     return [...transcriptMessages, ...selectedPendingMessages];
   }, [pendingMessages, selectedSessionId, transcript]);
-  const activeTasks = tasks.filter((task) => ["queued", "running", "in_progress"].includes(task.status));
   const selectedSessionTools = selectedSession ? tools.filter((tool) => tool.session_id === selectedSession.id) : [];
-  const selectedSessionToolErrors = selectedSessionTools.filter((tool) => tool.status !== "completed" || tool.error);
+  const selectedToolDetails =
+    selectedToolId && debug
+      ? debug.entries.find((entry) => entry.kind === "tool_call" && entry.id === selectedToolId) ?? null
+      : null;
   const commands = filterChatCommands(message);
   const scrollKey = `${visibleMessages.length}:${visibleMessages.at(-1)?.created_at ?? 0}:${visibleMessages.at(-1)?.content.length ?? 0}:${sending}:${pendingApprovals.length}`;
 
@@ -265,7 +274,10 @@ export function ChatScreen({
                       ) : null}
                     </Box>
                     {entry.role === "assistant" ? (
-                      <MarkdownMessage content={entry.content} />
+                      <>
+                        <MarkdownMessage content={entry.content} />
+                        <ChatMessageToolStats stats={buildToolStats(selectedSessionTools, entry.run_id)} />
+                      </>
                     ) : (
                       <Typography component="pre" className="chat-user-text">
                         {entry.content}
@@ -349,73 +361,18 @@ export function ChatScreen({
                 Свернуть
               </Button>
             </Stack>
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              {selectedSession ? (
-                <Stack spacing={1.25}>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    <Chip label={`сообщений: ${selectedSession.message_count}`} variant="outlined" />
-                    <Chip label={`context: ${selectedSession.context_tokens}`} variant="outlined" />
-                    <Chip label={`compact: ${selectedSession.compactifications}`} variant="outlined" />
-                    <Chip label={`tasks: ${tasks.length}`} variant="outlined" />
-                    <Chip label={`active: ${activeTasks.length}`} color={activeTasks.length ? "warning" : "default"} variant="outlined" />
-                    <Chip label={`tools: ${selectedSessionTools.length}`} variant="outlined" />
-                    <Chip
-                      label={`tool errors: ${selectedSessionToolErrors.length}`}
-                      color={selectedSessionToolErrors.length ? "error" : "default"}
-                      variant="outlined"
-                    />
-                    {selectedSession.has_pending_approval ? <Chip label="approval pending" color="warning" /> : null}
-                  </Stack>
-                  <KeyValueTable
-                    rows={[
-                      ["Агент", `${selectedSession.agent_name} (${selectedSession.agent_profile_id})`],
-                      ["Модель", selectedSession.model || "—"],
-                      ["Auto approve", selectedSession.auto_approve ? "да" : "нет"],
-                      ["Обновлена", formatTime(selectedSession.updated_at)]
-                    ]}
-                  />
-                  <Stack direction="row" spacing={1}>
-                    <Button color="warning" variant="outlined" onClick={onCancelRun}>
-                      Stop run
-                    </Button>
-                    <Button color="error" variant="outlined" onClick={onCancelAll}>
-                      Cancel all
-                    </Button>
-                  </Stack>
-                </Stack>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  Нет выбранной сессии.
-                </Typography>
-              )}
-            </Paper>
-
-            <Paper variant="outlined" sx={{ p: 1.5 }}>
-              <Typography fontWeight={700} sx={{ mb: 1 }}>
-                Последние tools
-              </Typography>
-              {selectedSessionTools.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  Нет tool calls в snapshot.
-                </Typography>
-              ) : (
-                <Stack spacing={1}>
-                  {selectedSessionTools.slice(0, 8).map((tool) => (
-                    <Box key={tool.id} className="chat-tool-row">
-                      <Stack direction="row" justifyContent="space-between" spacing={1}>
-                        <Typography className="mono" fontWeight={700}>
-                          {tool.tool_name}
-                        </Typography>
-                        <StatusChip value={tool.status} />
-                      </Stack>
-                      <Typography variant="caption" color={tool.error ? "error" : "text.secondary"}>
-                        {tool.error || tool.summary}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              )}
-            </Paper>
+            <ChatStatusPanel
+              selectedSession={selectedSession}
+              tasks={tasks}
+              tools={tools}
+              pendingApprovals={pendingApprovals}
+              selectedToolId={selectedToolId}
+              toolDetails={selectedToolDetails}
+              onSelectTool={setSelectedToolId}
+              onClearTool={() => setSelectedToolId(null)}
+              onCancelRun={onCancelRun}
+              onCancelAll={onCancelAll}
+            />
           </Stack>
         ) : (
           <button className="chat-rail-button" type="button" onClick={() => setStatusOpen(true)}>
