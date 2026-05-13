@@ -1,5 +1,7 @@
 use super::*;
-use crate::http::types::{DiagnosticsTailRequest, DiagnosticsTailResponse, UpdateRuntimeRequest};
+use crate::http::types::{
+    DiagnosticsTailRequest, DiagnosticsTailResponse, DiskPruneRequest, UpdateRuntimeRequest,
+};
 
 impl DaemonClient {
     pub fn about(&self) -> Result<String, BootstrapError> {
@@ -19,6 +21,22 @@ impl DaemonClient {
 
     pub fn status(&self) -> Result<StatusResponse, BootstrapError> {
         self.get_json("/v1/status")
+    }
+
+    pub fn disk_usage(&self) -> Result<crate::bootstrap::DiskUsageReport, BootstrapError> {
+        self.get_json("/v1/disk/usage")
+    }
+
+    pub fn disk_prune(
+        &self,
+        options: crate::bootstrap::DiskPruneOptions,
+    ) -> Result<crate::bootstrap::DiskPruneReport, BootstrapError> {
+        self.post_json(
+            "/v1/disk/prune",
+            &DiskPruneRequest {
+                dry_run: options.dry_run,
+            },
+        )
     }
 
     pub fn render_diagnostics_tail(

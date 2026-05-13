@@ -1,6 +1,7 @@
 mod agent_ops;
 mod context_ops;
 mod delivery_ops;
+mod disk_ops;
 mod execution_ops;
 mod mcp_ops;
 mod session_ops;
@@ -13,6 +14,9 @@ pub use agent_ops::{
 pub use delivery_ops::{
     DeliveryTargetCreateOptions, DeliveryTargetView, SessionOutputRouteCreateOptions,
     SessionOutputRouteView, TaskFollowerView,
+};
+pub use disk_ops::{
+    DiskPruneCandidate, DiskPruneOptions, DiskPruneReport, DiskUsageCategory, DiskUsageReport,
 };
 pub use mcp_ops::{McpConnectorCreateOptions, McpConnectorUpdatePatch, McpConnectorView};
 pub(crate) use mcp_ops::{render_mcp_connector_view, render_mcp_connectors_view};

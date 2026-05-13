@@ -30,6 +30,18 @@ impl Command {
                     max_lines: Some(parse_log_lines(max_lines)?),
                 })
             }
+            [scope, action]
+                if (scope == "disk" || scope == "диск")
+                    && (action == "usage" || action == "использование") =>
+            {
+                Ok(Self::DiskUsage)
+            }
+            [scope, action, rest @ ..]
+                if (scope == "disk" || scope == "диск")
+                    && (action == "prune" || action == "очистка") =>
+            {
+                parse_disk_prune_command(rest)
+            }
             [scope, action, trace_id] if scope == "trace" && action == "show" => {
                 Ok(Self::TraceShow {
                     trace_id: trace_id.clone(),
@@ -248,10 +260,28 @@ impl Command {
                 })
             }
             _ => Err(BootstrapError::Usage {
-                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/tasks/skills/enable-skill/disable-skill | task show/follow/unfollow/cancel | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
+                reason: "expected one of: status | logs [max_lines] | analytics [max_lines] | disk usage|prune [--execute] | trace show|run|export|push | version | update [tag] | tui | telegram run|pair|pairings | daemon | daemon stop | provider smoke | agent list/show/select/create/open | chat show/send/repl | mission create/show/tick | sessions | session create/list/show/transcript/tools/tasks/skills/enable-skill/disable-skill | task show/follow/unfollow/cancel | run show | job show/execute | approval list/approve | delegate list | verification show".to_string(),
             }),
         }
     }
+}
+
+fn parse_disk_prune_command(args: &[String]) -> Result<Command, BootstrapError> {
+    let mut dry_run = true;
+    for arg in args {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--execute" | "--apply" | "--yes" => dry_run = false,
+            other => {
+                return Err(BootstrapError::Usage {
+                    reason: format!(
+                        "unexpected disk prune argument {other}; expected --dry-run or --execute"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(Command::DiskPrune { dry_run })
 }
 
 fn parse_agent_command(args: &[String]) -> Result<Command, BootstrapError> {

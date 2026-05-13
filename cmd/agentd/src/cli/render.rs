@@ -5,6 +5,79 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const DEFAULT_SESSION_TOOL_PAGE_LIMIT: usize = 50;
 const DEFAULT_SESSION_TASK_PAGE_LIMIT: usize = 50;
 
+pub(super) fn render_disk_usage(report: &crate::bootstrap::DiskUsageReport) -> String {
+    let mut lines = vec![
+        "Disk usage".to_string(),
+        format!("data_dir: {}", report.data_dir),
+        format!("total: {}", format_bytes(report.total_bytes)),
+        String::new(),
+        "category\tbytes\tfiles\tdirs\tpath".to_string(),
+    ];
+
+    for category in &report.categories {
+        let path = category.path.as_deref().unwrap_or("<not configured>");
+        let exists = if category.exists { "" } else { " (missing)" };
+        lines.push(format!(
+            "{}\t{}\t{}\t{}\t{}{}",
+            category.id,
+            format_bytes(category.bytes),
+            category.files,
+            category.dirs,
+            path,
+            exists
+        ));
+        for error in &category.errors {
+            lines.push(format!("  error: {error}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
+pub(super) fn render_disk_prune(report: &crate::bootstrap::DiskPruneReport) -> String {
+    let mode = if report.dry_run { "dry-run" } else { "execute" };
+    let mut lines = vec![
+        format!("Disk prune ({mode})"),
+        format!(
+            "candidates: {} ({})",
+            report.candidate_count,
+            format_bytes(report.candidate_bytes)
+        ),
+        format!(
+            "deleted: {} files, {} dirs, {}",
+            report.deleted_files,
+            report.deleted_dirs,
+            format_bytes(report.deleted_bytes)
+        ),
+    ];
+
+    if report.dry_run {
+        lines.push("nothing was deleted; pass --execute to remove candidates".to_string());
+    }
+
+    if !report.candidates.is_empty() {
+        lines.push(String::new());
+        lines.push("category\tkind\tbytes\tremoved\tpath\treason".to_string());
+        for candidate in &report.candidates {
+            lines.push(format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                candidate.category,
+                candidate.kind,
+                format_bytes(candidate.bytes),
+                yes_no(candidate.removed),
+                candidate.path,
+                candidate.reason
+            ));
+        }
+    }
+
+    for error in &report.errors {
+        lines.push(format!("error: {error}"));
+    }
+
+    lines.join("\n")
+}
+
 pub(super) fn show_session_via_client(
     client: &DaemonClient,
     id: &str,
@@ -194,6 +267,22 @@ fn render_human_session_list(sessions: &[SessionSummary]) -> String {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn format_session_usage(input: Option<u32>, output: Option<u32>, total: Option<u32>) -> String {

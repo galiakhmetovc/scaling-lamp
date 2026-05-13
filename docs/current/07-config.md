@@ -200,6 +200,49 @@ TEAMD_EVENT_BUS_DLQ_STREAM=TEAMD_DLQ
 
 Если `event_bus.required = true` и Telegram включён, runtime валидирует `telegram.mode = "webhook"`. Это защита от двух конкурирующих ingestion paths для одного bot token.
 
+### `[retention]`
+
+Управляет ручной очисткой TeamD-owned runtime-файлов. Команды:
+
+```bash
+teamdctl disk usage
+teamdctl disk prune
+teamdctl disk prune --execute
+```
+
+`disk prune` по умолчанию всегда dry-run: он только показывает кандидатов. Реальное удаление возможно только с `--execute`.
+
+Параметры:
+
+- `audit_rotated_log_max_age_days` — rotated audit logs в `data_dir/audit`, но не текущий `runtime.jsonl`.
+- `debug_bundle_max_age_days` — `data_dir/audit/debug-bundles`.
+- `deploy_backup_max_age_days` — deploy backups из `deploy_backup_dir`.
+- `diagnostics_max_age_days` — diagnostic bundles из `diagnostics_dir`.
+- `legacy_sqlite_max_age_days` — старые `data_dir/state.sqlite*` после перехода на PostgreSQL.
+- `workspace_trash_max_age_days` — `.trash` внутри generated agent workspaces.
+- `workspace_scratch_max_age_days` — `scratch` внутри generated agent workspaces.
+- `session_archive_max_age_days` — `data_dir/archives`.
+- `deploy_backup_dir` — внешний путь к backup старых binary, например `/opt/teamd/backups`.
+- `diagnostics_dir` — внешний путь к diagnostic bundles, например `/var/lib/teamd/diagnostics`.
+
+Пример:
+
+```toml
+[retention]
+audit_rotated_log_max_age_days = 30
+debug_bundle_max_age_days = 14
+deploy_backup_max_age_days = 14
+diagnostics_max_age_days = 14
+legacy_sqlite_max_age_days = 7
+workspace_trash_max_age_days = 30
+workspace_scratch_max_age_days = 14
+session_archive_max_age_days = 180
+deploy_backup_dir = "/opt/teamd/backups"
+diagnostics_dir = "/var/lib/teamd/diagnostics"
+```
+
+Что не чистится автоматически: PostgreSQL rows, projects, обычные workspace-файлы, текущий `audit/runtime.jsonl`, canonical artifact payloads с metadata в PostgreSQL и SilverBullet space. Для таких данных нужен отдельный жизненный цикл, чтобы не получить битые ссылки в ledger.
+
 ### `[session_defaults]`
 
 Управляет настройками новых session:

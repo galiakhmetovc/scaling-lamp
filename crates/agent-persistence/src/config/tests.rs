@@ -174,6 +174,60 @@ stealth = true
 }
 
 #[test]
+fn load_reads_retention_config_from_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config_path = temp.path().join("teamd.toml");
+    let backups = temp.path().join("backups");
+    let diagnostics = temp.path().join("diagnostics");
+
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+data_dir = "/tmp/teamd-config"
+
+[retention]
+audit_rotated_log_max_age_days = 5
+debug_bundle_max_age_days = 6
+deploy_backup_max_age_days = 7
+diagnostics_max_age_days = 8
+legacy_sqlite_max_age_days = 9
+workspace_trash_max_age_days = 10
+workspace_scratch_max_age_days = 11
+session_archive_max_age_days = 12
+deploy_backup_dir = "{}"
+diagnostics_dir = "{}"
+"#,
+            backups.display(),
+            diagnostics.display()
+        ),
+    )
+    .expect("write config");
+
+    let mut env = base_env(temp.path());
+    env.config_path = Some(config_path);
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.retention.audit_rotated_log_max_age_days, 5);
+    assert_eq!(config.retention.debug_bundle_max_age_days, 6);
+    assert_eq!(config.retention.deploy_backup_max_age_days, 7);
+    assert_eq!(config.retention.diagnostics_max_age_days, 8);
+    assert_eq!(config.retention.legacy_sqlite_max_age_days, 9);
+    assert_eq!(config.retention.workspace_trash_max_age_days, 10);
+    assert_eq!(config.retention.workspace_scratch_max_age_days, 11);
+    assert_eq!(config.retention.session_archive_max_age_days, 12);
+    assert_eq!(
+        config.retention.deploy_backup_dir.as_deref(),
+        Some(backups.as_path())
+    );
+    assert_eq!(
+        config.retention.diagnostics_dir.as_deref(),
+        Some(diagnostics.as_path())
+    );
+}
+
+#[test]
 fn validate_rejects_enabled_browser_without_command() {
     let config = AppConfig {
         data_dir: PathBuf::from("/tmp/teamd"),
@@ -197,6 +251,7 @@ fn validate_rejects_enabled_browser_without_command() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -283,6 +338,7 @@ fn validate_rejects_empty_database_url() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -328,6 +384,7 @@ fn validate_rejects_relative_data_dir() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -851,6 +908,7 @@ fn config_requires_nats_for_webhook_event_runtime() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -904,6 +962,7 @@ fn config_rejects_polling_when_event_bus_is_required() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };
@@ -1197,6 +1256,7 @@ fn validate_rejects_invalid_runtime_limit_bounds() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: super::RuntimeLimitsConfig {
             agent_list_default_limit: 200,
@@ -1297,6 +1357,7 @@ fn validate_rejects_invalid_auto_compaction_ratio() {
         memory_recall: Default::default(),
         knowledge: Default::default(),
         observability: Default::default(),
+        retention: Default::default(),
         runtime_timing: Default::default(),
         runtime_limits: Default::default(),
     };

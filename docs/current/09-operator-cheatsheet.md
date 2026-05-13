@@ -359,6 +359,16 @@ teamdctl logs 200
 
 `agentd logs` читает `audit/runtime.jsonl`. Это diagnostic log процесса, не transcript агента.
 
+## Посмотреть и почистить диск TeamD
+
+```bash
+teamdctl disk usage
+teamdctl disk prune
+teamdctl disk prune --execute
+```
+
+`disk prune` без `--execute` ничего не удаляет. Он показывает кандидатов по retention policy. Проекты, обычные workspace-файлы, PostgreSQL rows, текущий `audit/runtime.jsonl`, canonical artifacts и transcripts prune-команда не трогает.
+
 ## Список sessions, transcript и tool-call ledger
 
 ```bash

@@ -26,6 +26,8 @@ CONFIG_FILE=${TEAMD_DEPLOY_CONFIG_FILE:-$CONFIG_DIR/config.toml}
 ENV_FILE=${TEAMD_DEPLOY_ENV_FILE:-$CONFIG_DIR/teamd.env}
 WORK_DIR=${TEAMD_DEPLOY_WORK_DIR:-/var/lib/teamd}
 DATA_DIR=${TEAMD_DEPLOY_DATA_DIR:-$WORK_DIR/state}
+DEPLOY_BACKUP_DIR=${TEAMD_DEPLOY_BACKUP_DIR:-$INSTALL_PREFIX/backups}
+DIAGNOSTICS_DIR=${TEAMD_DEPLOY_DIAGNOSTICS_DIR:-$WORK_DIR/diagnostics}
 SERVICE_USER=${TEAMD_DEPLOY_USER:-teamd}
 SERVICE_GROUP=${TEAMD_DEPLOY_GROUP:-$SERVICE_USER}
 DAEMON_SERVICE=${TEAMD_DEPLOY_DAEMON_SERVICE:-teamd-daemon.service}
@@ -730,6 +732,18 @@ max_tool_rounds = 24
 search_backend = "duckduckgo_html"
 search_url = "https://duckduckgo.com/html/"
 
+[retention]
+audit_rotated_log_max_age_days = 30
+debug_bundle_max_age_days = 14
+deploy_backup_max_age_days = 14
+diagnostics_max_age_days = 14
+legacy_sqlite_max_age_days = 7
+workspace_trash_max_age_days = 30
+workspace_scratch_max_age_days = 14
+session_archive_max_age_days = 180
+deploy_backup_dir = "$DEPLOY_BACKUP_DIR"
+diagnostics_dir = "$DIAGNOSTICS_DIR"
+
 [runtime_timing]
 daemon_background_worker_lease_seconds = 60
 
@@ -798,7 +812,7 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   run_root useradd --system --gid "$SERVICE_GROUP" --create-home --home-dir "$WORK_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$ENV_PARENT" "$PATH_LINK_PARENT" "$CTL_BIN_PARENT" "$WORK_DIR" "$DATA_DIR"
+run_root mkdir -p "$BIN_DIR" "$CONFIG_PARENT" "$ENV_PARENT" "$PATH_LINK_PARENT" "$CTL_BIN_PARENT" "$WORK_DIR" "$DATA_DIR" "$DEPLOY_BACKUP_DIR" "$DIAGNOSTICS_DIR"
 run_root install -m 0755 "$BINARY" "$BIN_DIR/agentd"
 run_root ln -sf "$BIN_DIR/agentd" "$PATH_LINK"
 run_root install -m 0755 -o root -g root "$CTL_SCRIPT" "$CTL_BIN"

@@ -33,6 +33,33 @@ fn process_cli_accepts_russian_version_and_update_commands() {
 }
 
 #[test]
+fn process_cli_accepts_disk_commands() {
+    let usage = super::ProcessInvocation::parse(["disk", "usage"]).expect("parse disk usage");
+    let prune = super::ProcessInvocation::parse(["disk", "prune"]).expect("parse disk prune");
+    let execute_prune =
+        super::ProcessInvocation::parse(["disk", "prune", "--execute"]).expect("parse execute");
+    let russian_usage =
+        super::ProcessInvocation::parse(["диск", "использование"]).expect("parse russian usage");
+    let russian_prune =
+        super::ProcessInvocation::parse(["диск", "очистка"]).expect("parse russian prune");
+
+    assert!(matches!(usage.command, super::Command::DiskUsage));
+    assert!(matches!(
+        prune.command,
+        super::Command::DiskPrune { dry_run: true }
+    ));
+    assert!(matches!(
+        execute_prune.command,
+        super::Command::DiskPrune { dry_run: false }
+    ));
+    assert!(matches!(russian_usage.command, super::Command::DiskUsage));
+    assert!(matches!(
+        russian_prune.command,
+        super::Command::DiskPrune { dry_run: true }
+    ));
+}
+
+#[test]
 fn process_cli_accepts_telegram_commands() {
     let run = super::ProcessInvocation::parse(["telegram", "run"]).expect("parse telegram run");
     let pair =

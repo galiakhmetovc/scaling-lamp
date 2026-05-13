@@ -15,6 +15,8 @@ pub(super) fn daemon_supports_command(command: &Command) -> bool {
     matches!(
         command,
         Command::Status
+            | Command::DiskUsage
+            | Command::DiskPrune { .. }
             | Command::AgentList
             | Command::AgentShow { .. }
             | Command::AgentSelect { .. }
@@ -48,6 +50,10 @@ pub(super) fn execute_command(app: &App, command: Command) -> Result<String, Boo
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
         Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
+        Command::DiskUsage => Ok(render::render_disk_usage(&app.disk_usage_report()?)),
+        Command::DiskPrune { dry_run } => Ok(render::render_disk_prune(
+            &app.disk_prune_report(crate::bootstrap::DiskPruneOptions { dry_run })?,
+        )),
         Command::TraceShow { trace_id } => render::show_trace(&app.store()?, &trace_id),
         Command::TraceRun { run_id } => render::show_trace_for_run(&app.store()?, &run_id),
         Command::TraceExport { trace_id } => render::export_trace_json(&app.store()?, &trace_id),
@@ -169,6 +175,10 @@ pub(super) fn execute_daemon_command(
 ) -> Result<String, BootstrapError> {
     match command {
         Command::Status => render::render_daemon_status(&client.status()?),
+        Command::DiskUsage => Ok(render::render_disk_usage(&client.disk_usage()?)),
+        Command::DiskPrune { dry_run } => Ok(render::render_disk_prune(
+            &client.disk_prune(crate::bootstrap::DiskPruneOptions { dry_run })?,
+        )),
         Command::Logs { max_lines } => client.render_diagnostics_tail(max_lines),
         Command::Version => client.about(),
         Command::Update { tag } => client.update_runtime(tag.as_deref()),

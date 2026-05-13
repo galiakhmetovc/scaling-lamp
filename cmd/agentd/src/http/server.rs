@@ -1,6 +1,7 @@
 mod a2a;
 mod agents;
 mod chat;
+mod disk;
 mod mcp;
 mod sessions;
 mod status;
@@ -73,6 +74,8 @@ fn handle_request(app: &App, shutdown: &Arc<AtomicBool>, request: Request) -> st
     match (request.method(), request_path.as_str()) {
         (&tiny_http::Method::Get, "/v1/status") => status::handle_status(app, request),
         (&tiny_http::Method::Get, "/v1/about") => status::handle_about(app, request),
+        (&tiny_http::Method::Get, "/v1/disk/usage") => disk::handle_disk_usage(app, request),
+        (&tiny_http::Method::Post, "/v1/disk/prune") => disk::handle_disk_prune(app, request),
         (&tiny_http::Method::Get, "/v1/web/snapshot") => web::handle_web_snapshot(app, request),
         (&tiny_http::Method::Post, "/v1/diagnostics/tail") => {
             status::handle_diagnostics_tail(app, request)

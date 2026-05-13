@@ -43,6 +43,10 @@ enum Command {
     Analytics {
         max_lines: Option<usize>,
     },
+    DiskUsage,
+    DiskPrune {
+        dry_run: bool,
+    },
     TraceShow {
         trace_id: String,
     },
@@ -245,6 +249,10 @@ where
         Command::Status => render::render_status(app),
         Command::Logs { max_lines } => render::render_diagnostics_tail(app, max_lines),
         Command::Analytics { max_lines } => render::render_runtime_analytics(app, max_lines),
+        Command::DiskUsage => Ok(render::render_disk_usage(&app.disk_usage_report()?)),
+        Command::DiskPrune { dry_run } => Ok(render::render_disk_prune(
+            &app.disk_prune_report(crate::bootstrap::DiskPruneOptions { dry_run })?,
+        )),
         Command::TraceShow { trace_id } => render::show_trace(&app.store()?, &trace_id),
         Command::TraceRun { run_id } => render::show_trace_for_run(&app.store()?, &run_id),
         Command::TraceExport { trace_id } => render::export_trace_json(&app.store()?, &trace_id),

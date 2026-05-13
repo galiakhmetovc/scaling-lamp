@@ -8,7 +8,7 @@ pub mod store;
 pub use config::{
     A2APeerConfig, AppConfig, BrowserConfig, BrowserlessConfig, ConfigEnv, ConfigError,
     DaemonConfig, DatabaseConfig, EventBusConfig, KnowledgeConfig, KnowledgeSourcePathConfig,
-    McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig, MemoryRecallConfig,
+    McpConnectorSeedConfig, Mem0Config, MemoryCuratorConfig, MemoryRecallConfig, RetentionConfig,
     RuntimeLimitsConfig, RuntimeTimingConfig, TelegramConfig, WorkspaceConfig,
     normalize_absolute_path, redacted_database_url, validate_workspace_root_path,
 };

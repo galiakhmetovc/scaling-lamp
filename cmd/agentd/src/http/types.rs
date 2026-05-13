@@ -37,6 +37,11 @@ pub struct StatusResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskPruneRequest {
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebSnapshotResponse {
     pub generated_at: i64,
     pub status: WebRuntimeStatusResponse,

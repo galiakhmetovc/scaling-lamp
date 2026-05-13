@@ -83,6 +83,7 @@ pub struct AppConfig {
     pub memory_recall: MemoryRecallConfig,
     pub knowledge: KnowledgeConfig,
     pub observability: ObservabilityConfig,
+    pub retention: RetentionConfig,
     pub runtime_timing: RuntimeTimingConfig,
     pub runtime_limits: RuntimeLimitsConfig,
 }
@@ -208,6 +209,21 @@ pub struct KnowledgeSourcePathConfig {
     pub path: PathBuf,
     pub root: KnowledgeRoot,
     pub kind: KnowledgeSourceKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct RetentionConfig {
+    pub audit_rotated_log_max_age_days: u64,
+    pub debug_bundle_max_age_days: u64,
+    pub deploy_backup_max_age_days: u64,
+    pub diagnostics_max_age_days: u64,
+    pub legacy_sqlite_max_age_days: u64,
+    pub workspace_trash_max_age_days: u64,
+    pub workspace_scratch_max_age_days: u64,
+    pub session_archive_max_age_days: u64,
+    pub deploy_backup_dir: Option<PathBuf>,
+    pub diagnostics_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -555,6 +571,7 @@ struct FileConfig {
     memory_recall: Option<MemoryRecallConfig>,
     knowledge: Option<KnowledgeConfig>,
     observability: Option<ObservabilityConfig>,
+    retention: Option<RetentionConfig>,
     runtime_timing: Option<RuntimeTimingConfig>,
     runtime_limits: Option<RuntimeLimitsConfig>,
 }
@@ -804,6 +821,23 @@ impl Default for ObservabilityConfig {
             otlp_export_enabled: false,
             otlp_endpoint: DEFAULT_OTLP_ENDPOINT.to_string(),
             otlp_timeout_ms: 2_000,
+        }
+    }
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            audit_rotated_log_max_age_days: 30,
+            debug_bundle_max_age_days: 14,
+            deploy_backup_max_age_days: 14,
+            diagnostics_max_age_days: 14,
+            legacy_sqlite_max_age_days: 7,
+            workspace_trash_max_age_days: 30,
+            workspace_scratch_max_age_days: 14,
+            session_archive_max_age_days: 180,
+            deploy_backup_dir: None,
+            diagnostics_dir: None,
         }
     }
 }
@@ -1446,6 +1480,10 @@ impl AppConfig {
             .as_ref()
             .and_then(|config| config.observability.clone())
             .unwrap_or_default();
+        let retention = file_config
+            .as_ref()
+            .and_then(|config| config.retention.clone())
+            .unwrap_or_default();
         let mut runtime_timing = file_config
             .as_ref()
             .and_then(|config| config.runtime_timing.clone())
@@ -1729,6 +1767,7 @@ impl AppConfig {
             memory_recall,
             knowledge,
             observability,
+            retention,
             runtime_timing,
             runtime_limits,
         };
@@ -2048,6 +2087,14 @@ impl AppConfig {
                 reason: "must not be empty",
             });
         }
+        validate_optional_absolute_path(
+            "retention.deploy_backup_dir",
+            self.retention.deploy_backup_dir.as_deref(),
+        )?;
+        validate_optional_absolute_path(
+            "retention.diagnostics_dir",
+            self.retention.diagnostics_dir.as_deref(),
+        )?;
 
         if let Some(default_root) = &self.workspace.default_root {
             if default_root.as_os_str().is_empty() {
@@ -2760,6 +2807,7 @@ fn load_file_config(path: &Path, required: bool) -> Result<FileConfig, ConfigErr
                 memory_recall: None,
                 knowledge: None,
                 observability: None,
+                retention: None,
                 runtime_timing: None,
                 runtime_limits: None,
             });
@@ -3140,6 +3188,23 @@ fn validate_relative_config_path(name: &'static str, path: &Path) -> Result<(), 
     Ok(())
 }
 
+fn validate_optional_absolute_path(
+    name: &'static str,
+    path: Option<&Path>,
+) -> Result<(), ConfigError> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if path.as_os_str().is_empty() || !path.is_absolute() || has_parent_component(path) {
+        return Err(ConfigError::InvalidProviderValue {
+            name,
+            value: path.display().to_string(),
+            reason: "must be an absolute path without parent components",
+        });
+    }
+    Ok(())
+}
+
 fn validate_extension_list(name: &'static str, extensions: &[String]) -> Result<(), ConfigError> {
     if extensions.is_empty() {
         return Err(ConfigError::InvalidProviderValue {
@@ -3358,6 +3423,7 @@ impl Default for AppConfig {
             memory_recall: MemoryRecallConfig::default(),
             knowledge: KnowledgeConfig::default(),
             observability: ObservabilityConfig::default(),
+            retention: RetentionConfig::default(),
             runtime_timing: RuntimeTimingConfig::default(),
             runtime_limits: RuntimeLimitsConfig::default(),
         }

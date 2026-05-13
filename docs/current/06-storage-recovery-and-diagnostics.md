@@ -49,6 +49,47 @@
 
 `/var/lib/teamd/knowledge/silverbullet/teamd` — external knowledge space, если включён SilverBullet add-on. Это не `data_dir`: runtime state остаётся в PostgreSQL + payload layout, а SilverBullet получает daily notes и best-effort human-readable session mirrors.
 
+## Disk usage и maintenance prune
+
+Операторские команды:
+
+```bash
+teamdctl disk usage
+teamdctl disk prune
+teamdctl disk prune --execute
+```
+
+`teamdctl disk usage` показывает размер TeamD-owned runtime-файлов по категориям: `artifacts`, `transcripts`, `archives`, `runs`, `agents`, `audit`, `legacy-sqlite`, generated agent `workspaces`, external deploy backups и external diagnostics, если их пути явно заданы в `[retention]`.
+
+`teamdctl disk prune` по умолчанию является dry-run. Он показывает кандидатов, размер, причину и путь, но ничего не удаляет. Фактическое удаление включается только явно:
+
+```bash
+teamdctl disk prune --execute
+```
+
+Что prune может удалять:
+
+- rotated audit logs в `data_dir/audit`, но не текущий `audit/runtime.jsonl`;
+- debug bundles в `data_dir/audit/debug-bundles`;
+- old session archives в `data_dir/archives`;
+- legacy PostgreSQL-era leftovers `data_dir/state.sqlite*`;
+- `.trash` и `scratch` внутри generated agent workspaces `<data_dir-parent>/workspaces/agents/<agent_id>/`;
+- deploy backups из `[retention].deploy_backup_dir`, если путь задан;
+- diagnostic bundles из `[retention].diagnostics_dir`, если путь задан.
+
+Что prune не удаляет:
+
+- проекты и обычные workspace-файлы;
+- PostgreSQL rows;
+- текущий `audit/runtime.jsonl`;
+- canonical artifact payloads из `artifacts/`, пока они связаны с PostgreSQL metadata;
+- transcript payloads;
+- SilverBullet space.
+
+Причина: artifact/transcript payload связан с PostgreSQL ledger, hash и search/debug views. Удалять payload без согласованного удаления metadata нельзя: это создаёт битые ссылки в `artifact_read`, TUI/Web debug и file delivery.
+
+Retention-настройки описаны в [07-config.md](07-config.md#retention).
+
 ## Что лежит в `data_dir`
 
 | Path | Что это | Можно ли редактировать руками |

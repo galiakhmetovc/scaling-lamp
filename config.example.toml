@@ -106,6 +106,21 @@ otlp_export_enabled = false
 otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
 otlp_timeout_ms = 2000
 
+[retention]
+# Manual disk maintenance policy. `agentd disk prune` is always dry-run unless
+# called with --execute. Projects and normal workspace files are never pruned.
+audit_rotated_log_max_age_days = 30
+debug_bundle_max_age_days = 14
+deploy_backup_max_age_days = 14
+diagnostics_max_age_days = 14
+legacy_sqlite_max_age_days = 7
+workspace_trash_max_age_days = 30
+workspace_scratch_max_age_days = 14
+session_archive_max_age_days = 180
+# External paths are opt-in and should be absolute.
+# deploy_backup_dir = "/opt/teamd/backups"
+# diagnostics_dir = "/var/lib/teamd/diagnostics"
+
 [web]
 search_backend = "duckduckgo_html"
 search_url = "https://duckduckgo.com/html/"
