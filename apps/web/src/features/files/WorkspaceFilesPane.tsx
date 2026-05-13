@@ -55,6 +55,8 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
   const [newFileName, setNewFileName] = useState("");
   const [newFileContent, setNewFileContent] = useState("");
   const [newDirName, setNewDirName] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadPath, setUploadPath] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -181,6 +183,38 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
       await loadDirectory(targetPath);
     } catch (mkdirError) {
       setError(mkdirError instanceof Error ? mkdirError.message : String(mkdirError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadSelectedFile() {
+    if (!uploadFile) {
+      return;
+    }
+    const targetPath = childNameForCreate(getParentPath(selectedPath), uploadPath || uploadFile.name);
+    if (!targetPath) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.workspaceUpload(sessionId, targetPath, uploadFile, "create");
+      setUploadFile(null);
+      setUploadPath("");
+      await loadDirectory(getParentPath(targetPath));
+      try {
+        const file = await api.workspaceRead(sessionId, targetPath);
+        setSelectedPath(targetPath);
+        setSelectedFile(file);
+        setEditorContent(file.content ?? "");
+      } catch {
+        setSelectedPath(targetPath);
+        setSelectedFile(null);
+        setEditorContent("");
+      }
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
       setSaving(false);
     }
@@ -358,6 +392,38 @@ export function WorkspaceFilesPane({ sessionId }: { sessionId: string }) {
                   Создать папку
                 </Button>
               </Stack>
+              <Divider />
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={1} alignItems={{ xs: "stretch", lg: "center" }}>
+                <Button variant="outlined" component="label">
+                  Выбрать файл
+                  <input
+                    hidden
+                    type="file"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      setUploadFile(file);
+                      if (file && !uploadPath.trim()) {
+                        setUploadPath(file.name);
+                      }
+                    }}
+                  />
+                </Button>
+                <TextField
+                  fullWidth
+                  label="Путь загрузки"
+                  value={uploadPath}
+                  onChange={(event) => setUploadPath(event.target.value)}
+                  placeholder={uploadFile?.name ?? "uploads/file.pdf"}
+                />
+                <Button variant="contained" disabled={saving || !uploadFile || !uploadPath.trim()} onClick={() => void uploadSelectedFile()}>
+                  Загрузить
+                </Button>
+              </Stack>
+              {uploadFile ? (
+                <Typography variant="caption" color="text.secondary">
+                  {uploadFile.name} · {uploadFile.size.toLocaleString("ru-RU")} bytes · режим create, существующий файл не перезаписывается
+                </Typography>
+              ) : null}
             </Stack>
           </Paper>
 

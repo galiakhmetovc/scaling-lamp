@@ -165,6 +165,50 @@ impl WorkspaceRef {
         })
     }
 
+    pub fn write_bytes_with_mode(
+        &self,
+        path: &str,
+        content: &[u8],
+        mode: WriteMode,
+    ) -> Result<WriteTextResult, WorkspaceError> {
+        let resolved = self.resolve(path)?;
+        let existed = resolved.exists();
+
+        match mode {
+            WriteMode::Create if existed => {
+                return Err(WorkspaceError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "write target already exists",
+                });
+            }
+            WriteMode::Overwrite if !existed => {
+                return Err(WorkspaceError::InvalidPath {
+                    path: path.to_string(),
+                    reason: "write target does not exist",
+                });
+            }
+            WriteMode::Upsert | WriteMode::Create | WriteMode::Overwrite => {}
+        }
+
+        if let Some(parent) = resolved.parent() {
+            fs::create_dir_all(parent).map_err(|source| WorkspaceError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+
+        fs::write(&resolved, content).map_err(|source| WorkspaceError::Io {
+            path: resolved.clone(),
+            source,
+        })?;
+
+        Ok(WriteTextResult {
+            bytes_written: content.len(),
+            created: !existed,
+            overwritten: existed,
+        })
+    }
+
     pub fn list(&self, path: &str, recursive: bool) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
         let resolved = self.resolve(path)?;
         let mut entries = Vec::new();
@@ -522,6 +566,33 @@ mod tests {
         );
         assert!(workspace.resolve("../escape").is_err());
         assert!(workspace.resolve("/abs/path").is_err());
+    }
+
+    #[test]
+    fn write_bytes_with_mode_writes_binary_content_and_respects_create_mode() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceRef::new(temp.path());
+
+        let result = workspace
+            .write_bytes_with_mode(
+                "uploads/blob.bin",
+                b"\x00\xffteamd",
+                super::WriteMode::Create,
+            )
+            .expect("write bytes");
+
+        assert_eq!(result.bytes_written, 7);
+        assert!(result.created);
+        assert!(!result.overwritten);
+        assert_eq!(
+            fs::read(temp.path().join("uploads/blob.bin")).expect("read bytes"),
+            b"\x00\xffteamd"
+        );
+        assert!(
+            workspace
+                .write_bytes_with_mode("uploads/blob.bin", b"again", super::WriteMode::Create)
+                .is_err()
+        );
     }
 
     #[cfg(unix)]

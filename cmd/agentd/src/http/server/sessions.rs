@@ -27,6 +27,7 @@ const WEB_WORKSPACE_LIST_DEFAULT_LIMIT: usize = 100;
 const WEB_WORKSPACE_LIST_MAX_LIMIT: usize = 500;
 const WEB_FILE_READ_DEFAULT_MAX_BYTES: usize = 256 * 1024;
 const WEB_FILE_READ_MAX_BYTES: usize = 2 * 1024 * 1024;
+const WEB_WORKSPACE_UPLOAD_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 pub(super) fn handle_create_session(app: &App, mut request: Request) -> std::io::Result<()> {
     let mut body = String::new();
@@ -304,6 +305,11 @@ pub(super) fn handle_nested_routes(app: &App, request: Request) -> std::io::Resu
             if workspace == "workspace" && action == "write" =>
         {
             handle_workspace_write(app, request, session_id.as_str())
+        }
+        (Method::Post, [session_id, workspace, action])
+            if workspace == "workspace" && action == "upload" =>
+        {
+            handle_workspace_upload(app, request, session_id.as_str())
         }
         (Method::Post, [session_id, workspace, action])
             if workspace == "workspace" && action == "mkdir" =>
@@ -837,6 +843,73 @@ fn handle_workspace_write(
                 ),
             }
         }
+        Err((status, payload)) => respond_json(request, status, &payload),
+    }
+}
+
+fn handle_workspace_upload(
+    app: &App,
+    mut request: Request,
+    session_id: &str,
+) -> std::io::Result<()> {
+    let query = parse_query(request.url());
+    let Some(path) = query
+        .get("path")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return respond_json(
+            request,
+            StatusCode(400),
+            &ErrorResponse {
+                error: "workspace upload requires non-empty path query parameter".to_string(),
+            },
+        );
+    };
+    let mode = match workspace_write_mode(query.get("mode").map(String::as_str)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            return respond_json(request, StatusCode(400), &ErrorResponse { error });
+        }
+    };
+
+    let mut body = Vec::new();
+    request.as_reader().read_to_end(&mut body)?;
+    if body.len() > WEB_WORKSPACE_UPLOAD_MAX_BYTES {
+        return respond_json(
+            request,
+            StatusCode(413),
+            &ErrorResponse {
+                error: format!(
+                    "workspace upload is too large: {} bytes > {} bytes",
+                    body.len(),
+                    WEB_WORKSPACE_UPLOAD_MAX_BYTES
+                ),
+            },
+        );
+    }
+
+    match session_workspace(app, session_id) {
+        Ok(workspace) => match workspace.write_bytes_with_mode(path.as_str(), &body, mode) {
+            Ok(result) => respond_json(
+                request,
+                StatusCode(200),
+                &SessionWorkspaceWriteResponse {
+                    workspace_root: workspace.root.display().to_string(),
+                    path,
+                    bytes_written: result.bytes_written,
+                    created: result.created,
+                    overwritten: result.overwritten,
+                },
+            ),
+            Err(error) => respond_json(
+                request,
+                workspace_error_status(&error),
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            ),
+        },
         Err((status, payload)) => respond_json(request, status, &payload),
     }
 }

@@ -173,6 +173,18 @@ export const api = {
       body: JSON.stringify({ path, content, mode })
     });
   },
+  workspaceUpload(sessionId: string, path: string, file: File, mode: "create" | "overwrite" | "upsert") {
+    return requestJson<WorkspaceWriteResult>(
+      endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/upload${queryString({ path, mode })}`),
+      {
+        method: "POST",
+        headers: {
+          "content-type": file.type || "application/octet-stream"
+        },
+        body: file
+      }
+    );
+  },
   workspaceMkdir(sessionId: string, path: string) {
     return requestJson<WorkspaceMkdirResult>(endpoint(`/v1/sessions/${encodeURIComponent(sessionId)}/workspace/mkdir`), {
       method: "POST",

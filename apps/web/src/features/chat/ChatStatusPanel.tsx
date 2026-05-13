@@ -1,7 +1,8 @@
-import { Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
+import { Button, Chip, Paper, Stack, Typography } from "@mui/material";
 import { KeyValueTable, StatusChip } from "../../components/common";
 import type { DebugEntry, PendingApproval, SessionSummary, SessionTask, ToolCallSummary } from "../../types";
-import { formatTime, short } from "../../utils/format";
+import { formatTime } from "../../utils/format";
+import { ToolDetailPanel } from "./ToolDetailPanel";
 import { buildToolStats } from "./toolStats";
 
 export function ChatStatusPanel({
@@ -91,11 +92,6 @@ export function ChatStatusPanel({
       <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
           <Typography fontWeight={700}>Последние tools</Typography>
-          {selectedTool ? (
-            <Button variant="text" onClick={onClearTool}>
-              Общий вид
-            </Button>
-          ) : null}
         </Stack>
         {selectedSessionTools.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
@@ -126,30 +122,7 @@ export function ChatStatusPanel({
       </Paper>
 
       {selectedTool ? (
-        <Paper variant="outlined" sx={{ p: 1.5 }}>
-          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-            <Typography fontWeight={700}>Детали tool call</Typography>
-            <StatusChip value={selectedTool.status} />
-          </Stack>
-          <KeyValueTable
-            rows={[
-              ["Tool", selectedTool.tool_name],
-              ["Run", short(selectedTool.run_id, 28)],
-              ["Запрошен", formatTime(selectedTool.requested_at)],
-              ["Обновлён", formatTime(selectedTool.updated_at)],
-              ["Result", selectedTool.result_summary || "—"],
-              ["Artifact", selectedTool.result_artifact_id || "—"]
-            ]}
-          />
-          {selectedTool.error ? (
-            <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-              {selectedTool.error}
-            </Typography>
-          ) : null}
-          <Box component="pre" className="chat-tool-detail">
-            {toolDetails?.detail ?? selectedTool.summary}
-          </Box>
-        </Paper>
+        <ToolDetailPanel tool={selectedTool} toolDetails={toolDetails} onClearTool={onClearTool} />
       ) : null}
     </Stack>
   );
