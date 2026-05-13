@@ -1,14 +1,14 @@
 use super::*;
 use crate::about::{APP_BUILD_ID, APP_COMMIT, APP_TREE_STATE, APP_VERSION};
 use crate::http::types::{
-    SessionSummaryResponse, WebAgentResponse, WebDeliveryTargetResponse, WebEventBusResponse,
-    WebRunResponse, WebRuntimeStatusResponse, WebSnapshotResponse, WebTelegramChatResponse,
-    WebToolCallResponse, WebTraceResponse,
+    SessionSummaryResponse, SessionTaskResponse, WebAgentResponse, WebDeliveryTargetResponse,
+    WebEventBusResponse, WebRunResponse, WebRuntimeStatusResponse, WebSnapshotResponse,
+    WebTelegramChatResponse, WebToolCallResponse, WebTraceResponse,
 };
 use crate::redaction::{redact_sensitive_option, redact_sensitive_text};
 use agent_persistence::{
-    AgentRepository, DeliveryRepository, RunRepository, TelegramRepository, ToolCallRepository,
-    TraceRepository,
+    AgentRepository, DeliveryRepository, RunRepository, TaskRegistryRecord, TaskRegistryRepository,
+    TelegramRepository, ToolCallRepository, TraceRepository,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +17,7 @@ const WEB_RUN_SESSION_LIMIT: usize = 3;
 const WEB_RUN_LIMIT: usize = 30;
 const WEB_TOOL_CALL_SESSION_LIMIT: usize = 60;
 const WEB_TOOL_CALL_LIMIT: usize = 120;
+const WEB_TASK_LIMIT: usize = 60;
 const WEB_TRACE_LIMIT: usize = 30;
 
 pub(super) fn is_web_console_request(request: &Request) -> bool {
@@ -119,6 +120,11 @@ fn build_web_snapshot(app: &App) -> Result<WebSnapshotResponse, BootstrapError> 
         .into_iter()
         .map(WebTraceResponse::from)
         .collect::<Vec<_>>();
+    let recent_tasks = store
+        .list_recent_task_registry(WEB_TASK_LIMIT)?
+        .into_iter()
+        .map(task_response_from_record)
+        .collect::<Vec<_>>();
 
     Ok(WebSnapshotResponse {
         generated_at: unix_timestamp()?,
@@ -149,10 +155,39 @@ fn build_web_snapshot(app: &App) -> Result<WebSnapshotResponse, BootstrapError> 
         agents,
         sessions,
         recent_runs,
+        recent_tasks,
         recent_tool_calls,
         delivery_targets,
         telegram_chats,
         recent_traces,
+    })
+}
+
+fn task_response_from_record(task: TaskRegistryRecord) -> SessionTaskResponse {
+    SessionTaskResponse::from(crate::bootstrap::SessionTask {
+        id: task.task_id,
+        kind: task.kind,
+        status: task.status,
+        source_session_id: task.source_session_id,
+        owner_agent_id: task.owner_agent_id,
+        executor_agent_id: task.executor_agent_id,
+        parent_task_id: task.parent_task_id,
+        dependency_json: task.dependency_json,
+        context_ref_json: task.context_ref_json,
+        result_ref_json: task.result_ref_json,
+        retry_policy_json: task.retry_policy_json,
+        attempt_count: task.attempt_count,
+        max_attempts: task.max_attempts,
+        timeout_at: task.timeout_at,
+        chain_id: task.chain_id,
+        hop_count: task.hop_count,
+        max_hops: task.max_hops,
+        trace_id: task.trace_id,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+        started_at: task.started_at,
+        finished_at: task.finished_at,
+        error: task.error,
     })
 }
 

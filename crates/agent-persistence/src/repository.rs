@@ -271,6 +271,10 @@ pub trait RouterRepository {
 pub trait TaskRegistryRepository {
     fn put_task_registry(&self, record: &TaskRegistryRecord) -> Result<(), StoreError>;
     fn get_task_registry(&self, task_id: &str) -> Result<Option<TaskRegistryRecord>, StoreError>;
+    fn list_recent_task_registry(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TaskRegistryRecord>, StoreError>;
     fn list_task_registry_for_session(
         &self,
         session_id: &str,

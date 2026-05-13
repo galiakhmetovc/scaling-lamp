@@ -218,6 +218,7 @@ export type WebSnapshot = {
   agents: AgentSummary[];
   sessions: SessionSummary[];
   recent_runs: RunSummary[];
+  recent_tasks: SessionTask[];
   recent_tool_calls: ToolCallSummary[];
   delivery_targets: DeliveryTarget[];
   telegram_chats: TelegramChat[];

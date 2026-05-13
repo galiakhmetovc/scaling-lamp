@@ -49,6 +49,7 @@ pub struct WebSnapshotResponse {
     pub agents: Vec<WebAgentResponse>,
     pub sessions: Vec<SessionSummaryResponse>,
     pub recent_runs: Vec<WebRunResponse>,
+    pub recent_tasks: Vec<SessionTaskResponse>,
     pub recent_tool_calls: Vec<WebToolCallResponse>,
     pub delivery_targets: Vec<WebDeliveryTargetResponse>,
     pub telegram_chats: Vec<WebTelegramChatResponse>,

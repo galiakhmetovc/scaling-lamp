@@ -95,6 +95,33 @@ impl TaskRegistryRepository for PersistenceStore {
         })
     }
 
+    fn list_recent_task_registry(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TaskRegistryRecord>, StoreError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.with_client(|client| {
+            client
+                .query(
+                    "SELECT task_id, kind, source_session_id, owner_agent_id, executor_agent_id,
+                            parent_task_id, status, dependency_json, context_ref_json, result_ref_json,
+                            retry_policy_json, attempt_count, max_attempts, timeout_at, chain_id,
+                            hop_count, max_hops, trace_id, created_at, updated_at, started_at,
+                            finished_at, error
+                     FROM task_registry
+                     ORDER BY updated_at DESC, created_at DESC, task_id ASC
+                     LIMIT $1",
+                    &[&limit],
+                )
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| task_registry_from_row(&row))
+                        .collect()
+                })
+                .map_err(StoreError::from)
+        })
+    }
+
     fn list_task_registry_for_session(
         &self,
         session_id: &str,

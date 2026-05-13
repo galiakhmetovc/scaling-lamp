@@ -315,6 +315,33 @@ fn daemon_http_web_snapshot_reads_runtime_data() {
             updated_at: 35,
         })
         .expect("put tool call");
+    store
+        .put_task_registry(&TaskRegistryRecord {
+            task_id: "task-web-new".to_string(),
+            kind: "agent_task".to_string(),
+            source_session_id: Some("session-web-new".to_string()),
+            owner_agent_id: Some("default".to_string()),
+            executor_agent_id: Some("judge".to_string()),
+            parent_task_id: None,
+            status: "running".to_string(),
+            dependency_json: "{}".to_string(),
+            context_ref_json: "{\"session_id\":\"session-web-new\"}".to_string(),
+            result_ref_json: None,
+            retry_policy_json: "{}".to_string(),
+            attempt_count: 1,
+            max_attempts: 3,
+            timeout_at: None,
+            chain_id: Some("chain-web-new".to_string()),
+            hop_count: Some(1),
+            max_hops: Some(3),
+            trace_id: Some("trace-web-new".to_string()),
+            created_at: 36,
+            updated_at: 37,
+            started_at: Some(36),
+            finished_at: None,
+            error: None,
+        })
+        .expect("put task");
 
     let handle = daemon::spawn_for_test(app).expect("spawn daemon");
     let client = Client::new();
@@ -329,6 +356,8 @@ fn daemon_http_web_snapshot_reads_runtime_data() {
     assert_eq!(snapshot["status"]["ok"], true);
     assert_eq!(snapshot["sessions"][0]["id"], "session-web-new");
     assert_eq!(snapshot["recent_runs"][0]["id"], "run-web-new");
+    assert_eq!(snapshot["recent_tasks"][0]["id"], "task-web-new");
+    assert_eq!(snapshot["recent_tasks"][0]["executor_agent_id"], "judge");
     assert_eq!(snapshot["recent_tool_calls"][0]["tool_name"], "web_fetch");
     let rendered_tool_calls =
         serde_json::to_string(&snapshot["recent_tool_calls"]).expect("tool calls json");

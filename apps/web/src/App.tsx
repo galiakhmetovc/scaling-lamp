@@ -7,6 +7,7 @@ import { CreateSessionDialog } from "./components/CreateSessionDialog";
 import { AgentsScreen } from "./features/agents/AgentsScreen";
 import { ChatScreen } from "./features/chat/ChatScreen";
 import { FilesScreen } from "./features/files/FilesScreen";
+import { MeshScreen } from "./features/mesh/MeshScreen";
 import { OverviewScreen } from "./features/overview/OverviewScreen";
 import { RoutesView } from "./features/routes/RoutesView";
 import { SessionsScreen } from "./features/sessions/SessionsScreen";
@@ -487,6 +488,18 @@ export function App() {
             toolErrors={toolErrors}
             activeRuns={activeRuns}
             onRefresh={() => void loadData()}
+          />
+        );
+      case "mesh":
+        return (
+          <MeshScreen
+            snapshot={snapshot}
+            loading={loading}
+            onRefresh={() => void loadData()}
+            onOpenSession={(sessionId) => {
+              setSelectedSessionId(sessionId);
+              setSection("chat");
+            }}
           />
         );
       case "chat":
