@@ -58,7 +58,17 @@ export function ChatStatusPanel({
               rows={[
                 ["Агент", `${selectedSession.agent_name} (${selectedSession.agent_profile_id})`],
                 ["Модель", selectedSession.model || "—"],
+                ["Think level", selectedSession.think_level || "default"],
+                ["Reasoning visible", selectedSession.reasoning_visible ? "да" : "нет"],
                 ["Auto approve", selectedSession.auto_approve ? "да" : "нет"],
+                ["Context tokens", String(selectedSession.context_tokens)],
+                [
+                  "Usage",
+                  selectedSession.usage_total_tokens
+                    ? `${selectedSession.usage_input_tokens ?? 0}/${selectedSession.usage_output_tokens ?? 0}/${selectedSession.usage_total_tokens}`
+                    : "—"
+                ],
+                ["Compactifications", String(selectedSession.compactifications)],
                 ["Обновлена", formatTime(selectedSession.updated_at)]
               ]}
             />
