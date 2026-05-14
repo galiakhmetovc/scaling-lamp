@@ -699,32 +699,54 @@ impl ExecutionService {
                     reason: format!("skill {} has no activation status", entry.name),
                 })
             })?;
-        let contents = std::fs::read_to_string(&entry.skill_md_path).map_err(|source| {
+        let requested_path =
+            normalized_skill_read_path(input.path.as_deref()).map_err(|reason| {
+                ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool { reason })
+            })?;
+        let target_path = resolve_skill_file_path(&entry.skill_dir, requested_path.as_str())
+            .map_err(|reason| {
+                ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool { reason })
+            })?;
+        let contents = std::fs::read_to_string(&target_path).map_err(|source| {
             ExecutionError::ProviderLoop {
                 reason: format!(
-                    "failed to read skill {} at {}: {source}",
+                    "failed to read skill {} file {} at {}: {source}",
                     entry.name,
-                    entry.skill_md_path.display()
+                    requested_path,
+                    target_path.display()
                 ),
             }
         })?;
-        let document = parse_skill_document(&entry.skill_md_path, &contents).map_err(|reason| {
+        let body_source = if requested_path.eq_ignore_ascii_case("SKILL.md") {
+            parse_skill_document(&entry.skill_md_path, &contents)
+                .map_err(|reason| {
+                    ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool {
+                        reason,
+                    })
+                })?
+                .body
+        } else {
+            contents
+        };
+        let files = list_skill_files(&entry.skill_dir).map_err(|reason| {
             ExecutionError::Tool(agent_runtime::tool::ToolError::InvalidMemoryTool { reason })
         })?;
         let max_bytes = input
             .max_bytes
             .unwrap_or(self.config.runtime_limits.skill_read_default_max_bytes)
             .clamp(1, self.config.runtime_limits.skill_read_max_bytes);
-        let (body, body_truncated) = truncate_utf8_bytes(&document.body, max_bytes);
+        let (body, body_truncated) = truncate_utf8_bytes(&body_source, max_bytes);
         Ok(SkillReadOutput {
             session_id: session.id,
             name: entry.name.clone(),
             description: entry.description.clone(),
             mode: Self::skill_mode_string(status.mode).to_string(),
+            path: requested_path,
             skill_dir: entry.skill_dir.display().to_string(),
             skill_md_path: entry.skill_md_path.display().to_string(),
+            files,
             body,
-            body_byte_len: document.body.len(),
+            body_byte_len: body_source.len(),
             body_truncated,
         })
     }
@@ -3529,6 +3551,122 @@ fn sanitize_delivery_file_name(value: &str) -> String {
     }
 }
 
+fn normalized_skill_read_path(raw: Option<&str>) -> Result<String, String> {
+    let value = raw.map(str::trim).filter(|value| !value.is_empty());
+    let path = value.unwrap_or("SKILL.md");
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        return Err("skill_read path must be relative to the skill directory".to_string());
+    }
+    for component in candidate.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err("skill_read path must not contain ..".to_string());
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err("skill_read path must be a plain relative path".to_string());
+            }
+        }
+    }
+    let normalized = candidate
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if normalized.is_empty() {
+        Ok("SKILL.md".to_string())
+    } else {
+        Ok(normalized)
+    }
+}
+
+fn resolve_skill_file_path(skill_dir: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    let canonical_skill_dir = std::fs::canonicalize(skill_dir).map_err(|source| {
+        format!(
+            "failed to resolve skill directory {}: {source}",
+            skill_dir.display()
+        )
+    })?;
+    let target = skill_dir.join(relative_path);
+    let canonical_target = std::fs::canonicalize(&target).map_err(|source| {
+        format!(
+            "failed to resolve skill file {}: {source}",
+            target.display()
+        )
+    })?;
+    if !canonical_target.starts_with(&canonical_skill_dir) {
+        return Err("skill_read path escaped the skill directory".to_string());
+    }
+    if !canonical_target.is_file() {
+        return Err(format!(
+            "skill_read path is not a regular file: {relative_path}"
+        ));
+    }
+    Ok(canonical_target)
+}
+
+const SKILL_FILE_MANIFEST_LIMIT: usize = 200;
+
+fn list_skill_files(skill_dir: &Path) -> Result<Vec<String>, String> {
+    fn collect(root: &Path, current: &Path, files: &mut Vec<String>) -> Result<(), String> {
+        if files.len() >= SKILL_FILE_MANIFEST_LIMIT {
+            return Ok(());
+        }
+        let entries = std::fs::read_dir(current).map_err(|source| {
+            format!(
+                "failed to list skill directory {}: {source}",
+                current.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| {
+                format!(
+                    "failed to read skill directory entry under {}: {source}",
+                    current.display()
+                )
+            })?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|source| {
+                format!(
+                    "failed to read skill file type {}: {source}",
+                    path.display()
+                )
+            })?;
+            if file_type.is_dir() {
+                collect(root, &path, files)?;
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|source| {
+                        format!(
+                            "failed to render skill file path {} relative to {}: {source}",
+                            path.display(),
+                            root.display()
+                        )
+                    })?
+                    .display()
+                    .to_string()
+                    .replace('\\', "/");
+                files.push(relative);
+            }
+            if files.len() >= SKILL_FILE_MANIFEST_LIMIT {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    collect(skill_dir, skill_dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4084,5 +4222,19 @@ mod tests {
         assert!(output.contains("\"retryable\":false"));
         assert!(output.contains("invalid web request"));
         assert!(output.contains("relative URL without a base"));
+    }
+
+    #[test]
+    fn normalized_skill_read_path_rejects_directory_escape() {
+        assert_eq!(
+            normalized_skill_read_path(None).expect("default skill path"),
+            "SKILL.md"
+        );
+        assert_eq!(
+            normalized_skill_read_path(Some("./examples/setup.md")).expect("relative skill path"),
+            "examples/setup.md"
+        );
+        assert!(normalized_skill_read_path(Some("../secret")).is_err());
+        assert!(normalized_skill_read_path(Some("/etc/passwd")).is_err());
     }
 }

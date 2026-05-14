@@ -34,13 +34,13 @@ import type {
   SessionSummary
 } from "../../types";
 import { formatTime, short } from "../../utils/format";
-import { describeMemoryLayer, jsonPreview, memoryScopes, parseJsonInput, type MemoryScope } from "./memoryModel";
+import { describeMemoryLayer, jsonPreview, memoryScopeRequiresSession, memoryScopes, parseJsonInput, type MemoryScope } from "./memoryModel";
 
 type MemoryTab = "recall" | "semantic" | "kv" | "boundary";
 
 export function MemoryScreen({ selectedSession }: { selectedSession: SessionSummary | null }) {
   const [tab, setTab] = useState<MemoryTab>("recall");
-  const [scope, setScope] = useState<MemoryScope>("workspace");
+  const [scope, setScope] = useState<MemoryScope>("operator");
   const [memoryQuery, setMemoryQuery] = useState("");
   const [recallQuery, setRecallQuery] = useState("");
   const [memoryOffset, setMemoryOffset] = useState(0);
@@ -60,13 +60,16 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionId = selectedSession?.id ?? null;
+  const scopeNeedsSession = memoryScopeRequiresSession(scope);
+  const scopeAvailable = !scopeNeedsSession || Boolean(sessionId);
 
   async function load(signal?: AbortSignal) {
-    if (!sessionId) {
+    if (!scopeAvailable) {
       setSemanticList(null);
       setSemanticSearch(null);
       setKvList(null);
       setRecallPreview(null);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -75,7 +78,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
       const [nextSemanticList, nextKvList, nextRecall] = await Promise.all([
         api.semanticMemoryList(sessionId, { scope, limit: 20, offset: memoryOffset }, signal),
         api.kvList(sessionId, { scope, prefix: kvPrefix, limit: 50, offset: kvOffset }, signal),
-        api.memoryRecallPreview(sessionId, recallQuery, signal)
+        sessionId ? api.memoryRecallPreview(sessionId, recallQuery, signal) : Promise.resolve(null)
       ]);
       setSemanticList(nextSemanticList);
       setSemanticSearch(null);
@@ -93,7 +96,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   }
 
   async function searchMemory() {
-    if (!sessionId) {
+    if (!scopeAvailable) {
       return;
     }
     const query = memoryQuery.trim();
@@ -148,7 +151,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   }
 
   async function putKv() {
-    if (!sessionId || !kvKey.trim()) {
+    if (!scopeAvailable || !kvKey.trim()) {
       return;
     }
     setBusy(true);
@@ -170,7 +173,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   }
 
   async function deleteKv(entry: KvEntry) {
-    if (!sessionId || !window.confirm(`Удалить KV ${entry.scope}/${entry.namespace_id}/${entry.key}?`)) {
+    if (!scopeAvailable || !window.confirm(`Удалить KV ${entry.scope}/${entry.namespace_id}/${entry.key}?`)) {
       return;
     }
     setBusy(true);
@@ -195,22 +198,13 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
     return () => controller.abort();
   }, [sessionId, scope, memoryOffset, kvOffset]);
 
-  if (!selectedSession) {
-    return (
-      <>
-        <SectionHeader title="Память" subtitle="Выбери сессию, чтобы смотреть scoped memory/KV относительно её агента и workspace." />
-        <EmptyState title="Сессия не выбрана" detail="Memory и KV scope вычисляются от конкретной сессии." />
-      </>
-    );
-  }
-
   const semanticRows = semanticSearch?.results ?? semanticList?.results ?? [];
 
   return (
     <Stack spacing={2}>
       <SectionHeader
         title="Память"
-        subtitle="Операторский доступ к Mem0 semantic memory, scoped KV и preview того, что будет подмешано в prompt."
+        subtitle="Операторский доступ ко всей Mem0 semantic memory и scoped KV. Сессия нужна только для workspace/agent/session scopes и recall preview."
         action={
           <Button variant="outlined" disabled={loading} onClick={() => void load()}>
             Обновить
@@ -218,6 +212,12 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
         }
       />
       {error ? <Alert severity="error">{error}</Alert> : null}
+      {!scopeAvailable ? (
+        <Alert severity="info">
+          Scope `{scope}` вычисляется от выбранной сессии. Выбери сессию или переключись на `operator`/`agent_shared`, чтобы смотреть глобальную
+          память без привязки к чату.
+        </Alert>
+      ) : null}
 
       <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ xs: "stretch", md: "center" }}>
@@ -228,9 +228,9 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
               </MenuItem>
             ))}
           </TextField>
-          <Chip label={`session: ${short(selectedSession.id, 24)}`} variant="outlined" />
-          <Chip label={`agent: ${selectedSession.agent_profile_id}`} variant="outlined" />
-          <Chip label={`workspace memory: ${scope}`} color="primary" variant="outlined" />
+          <Chip label={selectedSession ? `context session: ${short(selectedSession.id, 24)}` : "context session: not required"} variant="outlined" />
+          {selectedSession ? <Chip label={`agent: ${selectedSession.agent_profile_id}`} variant="outlined" /> : null}
+          <Chip label={`scope: ${scope}`} color="primary" variant="outlined" />
         </Stack>
       </Paper>
 
@@ -249,13 +249,16 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
         </Tabs>
       </Paper>
 
-      {tab === "recall" ? (
+      {tab === "recall" && sessionId ? (
         <RecallPreviewPane
           query={recallQuery}
           preview={recallPreview}
           onQueryChange={setRecallQuery}
           onRefresh={() => void load()}
         />
+      ) : null}
+      {tab === "recall" && !sessionId ? (
+        <EmptyState title="Recall preview требует сессию" detail="Memory recall показывает, что будет подмешано в prompt конкретного чата." />
       ) : null}
       {tab === "semantic" ? (
         <SemanticMemoryPane

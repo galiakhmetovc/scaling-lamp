@@ -73,12 +73,23 @@ impl ExecutionService {
         session_id: &str,
         input: &MemorySearchInput,
     ) -> Result<MemorySearchOutput, ExecutionError> {
+        self.search_semantic_memory_context(store, Some(session_id), input)
+    }
+
+    pub(super) fn search_semantic_memory_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &MemorySearchInput,
+    ) -> Result<MemorySearchOutput, ExecutionError> {
         self.ensure_mem0_enabled()?;
         if input.query.trim().is_empty() {
             return Err(invalid_mem0_tool("memory_search query must not be empty"));
         }
-        let session = self.load_session(store, session_id)?;
-        let ids = self.mem0_scope_ids(&session, input.scope.as_deref())?;
+        let session = session_id
+            .map(|session_id| self.load_session(store, session_id))
+            .transpose()?;
+        let ids = self.mem0_scope_ids_for_context(session.as_ref(), input.scope.as_deref())?;
         let limit = self.mem0_limit(input.limit);
         let body = mem0_search_body(input.query.as_str(), &ids, limit, &input.filters)?;
         let response = self.mem0_request(Method::Post, "search")?.json(&body);
@@ -100,9 +111,20 @@ impl ExecutionService {
         session_id: &str,
         input: &MemoryListInput,
     ) -> Result<MemoryListOutput, ExecutionError> {
+        self.list_semantic_memories_context(store, Some(session_id), input)
+    }
+
+    pub(super) fn list_semantic_memories_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &MemoryListInput,
+    ) -> Result<MemoryListOutput, ExecutionError> {
         self.ensure_mem0_enabled()?;
-        let session = self.load_session(store, session_id)?;
-        let ids = self.mem0_scope_ids(&session, input.scope.as_deref())?;
+        let session = session_id
+            .map(|session_id| self.load_session(store, session_id))
+            .transpose()?;
+        let ids = self.mem0_scope_ids_for_context(session.as_ref(), input.scope.as_deref())?;
         let limit = self.mem0_limit(input.limit);
         let offset = input.offset.unwrap_or(0);
         let response = self
@@ -228,7 +250,21 @@ impl ExecutionService {
         session: &Session,
         raw_scope: Option<&str>,
     ) -> Result<Mem0ScopeIds, ExecutionError> {
+        self.mem0_scope_ids_for_context(Some(session), raw_scope)
+    }
+
+    fn mem0_scope_ids_for_context(
+        &self,
+        session: Option<&Session>,
+        raw_scope: Option<&str>,
+    ) -> Result<Mem0ScopeIds, ExecutionError> {
         let scope = RuntimeScope::parse(raw_scope, "memory")?;
+        if scope.requires_session_context() && session.is_none() {
+            return Err(invalid_mem0_tool(format!(
+                "memory {} scope requires a session context; use operator or agent_shared for global memory",
+                scope.as_str()
+            )));
+        }
         let user_id = match scope {
             RuntimeScope::Operator => Some(self.config.mem0.default_user_id.trim().to_string()),
             RuntimeScope::Agent
@@ -237,9 +273,16 @@ impl ExecutionService {
             | RuntimeScope::Session => None,
         };
         let agent_id = match scope {
-            RuntimeScope::Agent => Some(session.agent_profile_id.clone()),
+            RuntimeScope::Agent => Some(
+                session
+                    .expect("checked session context")
+                    .agent_profile_id
+                    .clone(),
+            ),
             RuntimeScope::AgentShared => Some(AGENT_SHARED_SCOPE_ID.to_string()),
-            RuntimeScope::Workspace => Some(workspace_scope_id(session)),
+            RuntimeScope::Workspace => Some(workspace_scope_id(
+                session.expect("checked session context"),
+            )),
             RuntimeScope::Operator | RuntimeScope::Session => None,
         };
         let app_id = match scope {
@@ -250,7 +293,7 @@ impl ExecutionService {
             | RuntimeScope::Session => None,
         };
         let run_id = match scope {
-            RuntimeScope::Session => Some(session.id.clone()),
+            RuntimeScope::Session => Some(session.expect("checked session context").id.clone()),
             RuntimeScope::Operator
             | RuntimeScope::Agent
             | RuntimeScope::AgentShared

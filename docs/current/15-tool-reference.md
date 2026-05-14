@@ -864,13 +864,15 @@ skill_list({
 Сигнатура:
 
 ```text
-skill_read({ name: string, max_bytes?: integer | null })
+skill_read({ name: string, path?: string | null, max_bytes?: integer | null })
 ```
 
 Что делает:
 
-- читает body `SKILL.md` для skill из текущего merged catalog;
-- возвращает description, activation mode, paths, body, исходный `body_byte_len` и `body_truncated`;
+- читает файл из папки skill в текущем merged catalog;
+- по умолчанию читает body `SKILL.md`, но `path` может указывать на любой файл внутри папки skill: `examples/...`, `templates/...`, `scripts/...`;
+- возвращает description, activation mode, paths, manifest `files`, body, исходный `body_byte_len` и `body_truncated`;
+- запрещает absolute path и `..`, поэтому это безопасный способ читать файлы skill вне workspace;
 - `max_bytes` bounded и режется по UTF-8 границе.
 
 Когда использовать:

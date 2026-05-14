@@ -387,6 +387,8 @@ otlp_timeout_ms = 2000
 ./scripts/deploy-teamd-containers.sh --with-jaeger
 ```
 
+Команда поднимает Jaeger и настраивает endpoint, но не включает постоянный auto-export. Для обычной диагностики используйте локальные `trace show/export` или ручной `trace push`.
+
 Сбой OTLP/Jaeger экспорта не должен ломать пользовательский turn. Runtime пишет диагностическое событие `component=otel`, `op=export`, `outcome=error` в `audit/runtime.jsonl`, а локальные `trace_links`, transcripts, tool calls и artifacts остаются источником истины.
 
 В установке через `deploy-teamd.sh` создаются два operator entrypoint:

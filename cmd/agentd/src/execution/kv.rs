@@ -1,4 +1,4 @@
-use super::scopes::kv_namespace_id;
+use super::scopes::{kv_namespace_id, kv_namespace_id_for_context};
 use super::*;
 use agent_persistence::{KvEntryRecord, KvRepository};
 use agent_runtime::tool::{
@@ -42,11 +42,23 @@ impl ExecutionService {
         input: &KvPutInput,
         now: i64,
     ) -> Result<KvPutOutput, ExecutionError> {
-        let session = self.load_session(store, session_id)?;
+        self.put_kv_entry_context(store, Some(session_id), input, now)
+    }
+
+    pub(super) fn put_kv_entry_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvPutInput,
+        now: i64,
+    ) -> Result<KvPutOutput, ExecutionError> {
+        let session = session_id
+            .map(|session_id| self.load_session(store, session_id))
+            .transpose()?;
         let key =
             normalized_kv_key_with_limit(&input.key, self.config.runtime_limits.kv_key_max_bytes)?;
-        let (scope, namespace_id) = kv_namespace_id(
-            &session,
+        let (scope, namespace_id) = kv_namespace_id_for_context(
+            session.as_ref(),
             self.config.mem0.default_user_id.as_str(),
             input.scope.as_deref(),
         )?;
@@ -98,9 +110,21 @@ impl ExecutionService {
         input: &KvListInput,
         now: i64,
     ) -> Result<KvListOutput, ExecutionError> {
-        let session = self.load_session(store, session_id)?;
-        let (scope, namespace_id) = kv_namespace_id(
-            &session,
+        self.list_kv_entries_context(store, Some(session_id), input, now)
+    }
+
+    pub(super) fn list_kv_entries_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvListInput,
+        now: i64,
+    ) -> Result<KvListOutput, ExecutionError> {
+        let session = session_id
+            .map(|session_id| self.load_session(store, session_id))
+            .transpose()?;
+        let (scope, namespace_id) = kv_namespace_id_for_context(
+            session.as_ref(),
             self.config.mem0.default_user_id.as_str(),
             input.scope.as_deref(),
         )?;
@@ -159,11 +183,22 @@ impl ExecutionService {
         session_id: &str,
         input: &KvDeleteInput,
     ) -> Result<KvDeleteOutput, ExecutionError> {
-        let session = self.load_session(store, session_id)?;
+        self.delete_kv_entry_context(store, Some(session_id), input)
+    }
+
+    pub(super) fn delete_kv_entry_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvDeleteInput,
+    ) -> Result<KvDeleteOutput, ExecutionError> {
+        let session = session_id
+            .map(|session_id| self.load_session(store, session_id))
+            .transpose()?;
         let key =
             normalized_kv_key_with_limit(&input.key, self.config.runtime_limits.kv_key_max_bytes)?;
-        let (scope, namespace_id) = kv_namespace_id(
-            &session,
+        let (scope, namespace_id) = kv_namespace_id_for_context(
+            session.as_ref(),
             self.config.mem0.default_user_id.as_str(),
             input.scope.as_deref(),
         )?;

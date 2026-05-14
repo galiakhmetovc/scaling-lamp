@@ -583,7 +583,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SkillRead,
                 family: ToolFamily::Memory,
-                description: "Read one skill's SKILL.md body by name with an optional max_bytes bound. Use this instead of guessing skill instructions.",
+                description: "Read one file from a skill directory by skill name and optional relative path. Defaults to SKILL.md, returns a file manifest, and rejects absolute paths or .. escapes. Use this instead of guessing skill instructions or trying filesystem reads outside the workspace.",
                 policy: ToolPolicy {
                     read_only: true,
                     destructive: false,

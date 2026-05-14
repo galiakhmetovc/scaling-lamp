@@ -2,6 +2,10 @@ export const memoryScopes = ["operator", "workspace", "agent", "agent_shared", "
 
 export type MemoryScope = (typeof memoryScopes)[number];
 
+export function memoryScopeRequiresSession(scope: MemoryScope): boolean {
+  return scope === "workspace" || scope === "agent" || scope === "session";
+}
+
 export function jsonPreview(value: unknown, maxLength = 180): string {
   const rendered = typeof value === "string" ? value : JSON.stringify(value);
   if (!rendered) {

@@ -99,8 +99,8 @@ auto_compaction_trigger_ratio = 0.7
 # context_window_tokens_override = 200000
 
 [observability]
-# Disabled by default. deploy-teamd-containers.sh --with-jaeger enables these
-# through /etc/teamd/teamd.env for production-like installs.
+# Disabled by default. deploy-teamd-containers.sh --with-jaeger configures
+# the endpoint through /etc/teamd/teamd.env, but leaves auto-export disabled.
 otlp_export_enabled = false
 otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
 otlp_timeout_ms = 2000

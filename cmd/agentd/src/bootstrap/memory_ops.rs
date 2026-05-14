@@ -18,6 +18,17 @@ impl App {
             .map_err(BootstrapError::Execution)
     }
 
+    pub fn semantic_memory_search_context(
+        &self,
+        session_id: Option<&str>,
+        input: MemorySearchInput,
+    ) -> Result<MemorySearchOutput, BootstrapError> {
+        let store = self.store()?;
+        self.execution_service()
+            .semantic_memory_search_for_context(&store, session_id, &input)
+            .map_err(BootstrapError::Execution)
+    }
+
     pub fn semantic_memory_list(
         &self,
         session_id: &str,
@@ -26,6 +37,17 @@ impl App {
         let store = self.store()?;
         self.execution_service()
             .semantic_memory_list_for_session(&store, session_id, &input)
+            .map_err(BootstrapError::Execution)
+    }
+
+    pub fn semantic_memory_list_context(
+        &self,
+        session_id: Option<&str>,
+        input: MemoryListInput,
+    ) -> Result<MemoryListOutput, BootstrapError> {
+        let store = self.store()?;
+        self.execution_service()
+            .semantic_memory_list_for_context(&store, session_id, &input)
             .map_err(BootstrapError::Execution)
     }
 
@@ -59,6 +81,18 @@ impl App {
             .map_err(BootstrapError::Execution)
     }
 
+    pub fn kv_list_context(
+        &self,
+        session_id: Option<&str>,
+        input: KvListInput,
+        now: i64,
+    ) -> Result<KvListOutput, BootstrapError> {
+        let store = self.store()?;
+        self.execution_service()
+            .kv_list_for_context(&store, session_id, &input, now)
+            .map_err(BootstrapError::Execution)
+    }
+
     pub fn kv_put(
         &self,
         session_id: &str,
@@ -71,6 +105,18 @@ impl App {
             .map_err(BootstrapError::Execution)
     }
 
+    pub fn kv_put_context(
+        &self,
+        session_id: Option<&str>,
+        input: KvPutInput,
+        now: i64,
+    ) -> Result<KvPutOutput, BootstrapError> {
+        let store = self.store()?;
+        self.execution_service()
+            .kv_put_for_context(&store, session_id, &input, now)
+            .map_err(BootstrapError::Execution)
+    }
+
     pub fn kv_delete(
         &self,
         session_id: &str,
@@ -79,6 +125,17 @@ impl App {
         let store = self.store()?;
         self.execution_service()
             .kv_delete_for_session(&store, session_id, &input)
+            .map_err(BootstrapError::Execution)
+    }
+
+    pub fn kv_delete_context(
+        &self,
+        session_id: Option<&str>,
+        input: KvDeleteInput,
+    ) -> Result<KvDeleteOutput, BootstrapError> {
+        let store = self.store()?;
+        self.execution_service()
+            .kv_delete_for_context(&store, session_id, &input)
             .map_err(BootstrapError::Execution)
     }
 

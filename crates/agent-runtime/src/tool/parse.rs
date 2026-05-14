@@ -517,8 +517,9 @@ impl ToolCall {
                 input.limit.unwrap_or(20)
             ),
             Self::SkillRead(input) => format!(
-                "skill_read name={} max_bytes={}",
+                "skill_read name={} path={} max_bytes={}",
                 input.name,
+                input.path.as_deref().unwrap_or("SKILL.md"),
                 input
                     .max_bytes
                     .map(|value| value.to_string())

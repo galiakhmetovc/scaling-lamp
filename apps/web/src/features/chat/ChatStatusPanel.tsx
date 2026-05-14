@@ -55,7 +55,11 @@ export function ChatStatusPanel({
   const [titleDraft, setTitleDraft] = useState("");
   const [modelDraft, setModelDraft] = useState("");
   const activeTasks = tasks.filter((task) => ["queued", "running", "in_progress"].includes(task.status));
-  const selectedSessionTools = selectedSession ? tools.filter((tool) => tool.session_id === selectedSession.id) : [];
+  const selectedSessionTools = selectedSession
+    ? tools
+        .filter((tool) => tool.session_id === selectedSession.id)
+        .sort((left, right) => (right.updated_at || right.requested_at || 0) - (left.updated_at || left.requested_at || 0))
+    : [];
   const selectedSessionToolErrors = selectedSessionTools.filter((tool) => tool.status !== "completed" || tool.error);
   const stats = buildToolStats(selectedSessionTools);
   const selectedTool = selectedToolId ? selectedSessionTools.find((tool) => tool.id === selectedToolId) ?? null : null;
@@ -206,6 +210,9 @@ export function ChatStatusPanel({
                 </Stack>
                 <Typography variant="caption" color={tool.error ? "error" : "text.secondary"}>
                   {tool.error || tool.summary}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" className="mono">
+                  старт: {formatTime(tool.requested_at)} · обновлено: {formatTime(tool.updated_at)}
                 </Typography>
               </button>
             ))}

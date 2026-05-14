@@ -546,13 +546,15 @@ Agent workflow:
 
 ## Jaeger
 
-`--with-jaeger` поднимает `teamd-jaeger` и включает best-effort OTLP export:
+`--with-jaeger` поднимает `teamd-jaeger` и настраивает OTLP endpoint. Best-effort OTLP auto-export остаётся выключенным по умолчанию:
 
 ```bash
-TEAMD_OTLP_EXPORT_ENABLED='true'
+TEAMD_OTLP_EXPORT_ENABLED='false'
 TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
 TEAMD_OTLP_TIMEOUT_MS='2000'
 ```
+
+Для постоянного auto-export поменяй `TEAMD_OTLP_EXPORT_ENABLED` на `true` явно. Для разовой отправки trace достаточно `agentd trace push <trace_id>`.
 
 UI:
 

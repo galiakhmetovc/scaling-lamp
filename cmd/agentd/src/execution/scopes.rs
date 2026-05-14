@@ -37,6 +37,10 @@ impl RuntimeScope {
             Self::Session => "session",
         }
     }
+
+    pub(super) fn requires_session_context(self) -> bool {
+        matches!(self, Self::Agent | Self::Workspace | Self::Session)
+    }
 }
 
 pub(super) fn workspace_scope_id(session: &Session) -> String {
@@ -51,13 +55,32 @@ pub(super) fn kv_namespace_id(
     default_operator_id: &str,
     raw_scope: Option<&str>,
 ) -> Result<(RuntimeScope, String), ExecutionError> {
+    kv_namespace_id_for_context(Some(session), default_operator_id, raw_scope)
+}
+
+pub(super) fn kv_namespace_id_for_context(
+    session: Option<&Session>,
+    default_operator_id: &str,
+    raw_scope: Option<&str>,
+) -> Result<(RuntimeScope, String), ExecutionError> {
     let scope = RuntimeScope::parse(raw_scope, "kv")?;
+    if scope.requires_session_context() && session.is_none() {
+        return Err(ExecutionError::Tool(ToolError::InvalidMemoryTool {
+            reason: format!(
+                "kv {} scope requires a session context; use operator or agent_shared for global KV",
+                scope.as_str()
+            ),
+        }));
+    }
     let namespace_id = match scope {
         RuntimeScope::Operator => default_operator_id.trim().to_string(),
-        RuntimeScope::Agent => session.agent_profile_id.clone(),
+        RuntimeScope::Agent => session
+            .expect("checked session context")
+            .agent_profile_id
+            .clone(),
         RuntimeScope::AgentShared => AGENT_SHARED_SCOPE_ID.to_string(),
-        RuntimeScope::Workspace => workspace_scope_id(session),
-        RuntimeScope::Session => session.id.clone(),
+        RuntimeScope::Workspace => workspace_scope_id(session.expect("checked session context")),
+        RuntimeScope::Session => session.expect("checked session context").id.clone(),
     };
     if namespace_id.trim().is_empty() {
         return Err(ExecutionError::Tool(ToolError::InvalidMemoryTool {

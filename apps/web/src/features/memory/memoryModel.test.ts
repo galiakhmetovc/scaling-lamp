@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { describeMemoryLayer, jsonPreview, parseJsonInput } from "./memoryModel.ts";
+import { describeMemoryLayer, jsonPreview, memoryScopeRequiresSession, parseJsonInput } from "./memoryModel.ts";
 
 describe("memoryModel", () => {
   it("renders bounded JSON previews", () => {
@@ -17,5 +17,13 @@ describe("memoryModel", () => {
     assert.match(describeMemoryLayer("mem0"), /семантическая/);
     assert.match(describeMemoryLayer("kv"), /key-value/);
     assert.match(describeMemoryLayer("silverbullet"), /заметки/);
+  });
+
+  it("distinguishes global and session-context memory scopes", () => {
+    assert.equal(memoryScopeRequiresSession("operator"), false);
+    assert.equal(memoryScopeRequiresSession("agent_shared"), false);
+    assert.equal(memoryScopeRequiresSession("workspace"), true);
+    assert.equal(memoryScopeRequiresSession("agent"), true);
+    assert.equal(memoryScopeRequiresSession("session"), true);
   });
 });

@@ -22,17 +22,12 @@ const KV_LIST_MAX_LIMIT: usize = 200;
 
 pub(super) fn handle_semantic_memory_list(app: &App, request: Request) -> std::io::Result<()> {
     let query = parse_query(request.url());
-    let Some(session_id) = query.get("session_id").filter(|value| !value.is_empty()) else {
-        return respond_json(
-            request,
-            StatusCode(400),
-            &ErrorResponse {
-                error: "session_id is required".to_string(),
-            },
-        );
-    };
+    let session_id = optional_query_value(&query, "session_id");
     let input = MemoryListInput {
-        scope: query.get("scope").cloned(),
+        scope: query
+            .get("scope")
+            .cloned()
+            .or_else(|| session_id.is_none().then(|| "operator".to_string())),
         limit: Some(
             query_usize(&query, "limit")
                 .unwrap_or(MEMORY_LIST_DEFAULT_LIMIT)
@@ -41,7 +36,7 @@ pub(super) fn handle_semantic_memory_list(app: &App, request: Request) -> std::i
         offset: Some(query_usize(&query, "offset").unwrap_or(0)),
         filters: Value::Null,
     };
-    match app.semantic_memory_list(session_id, input) {
+    match app.semantic_memory_list_context(session_id, input) {
         Ok(output) => respond_json(
             request,
             StatusCode(200),
@@ -73,11 +68,13 @@ pub(super) fn handle_semantic_memory_search(
         Ok(payload) => {
             let input = MemorySearchInput {
                 query: payload.query,
-                scope: payload.scope,
+                scope: payload
+                    .scope
+                    .or_else(|| payload.session_id.is_none().then(|| "operator".to_string())),
                 limit: payload.limit,
                 filters: payload.filters,
             };
-            match app.semantic_memory_search(payload.session_id.as_str(), input) {
+            match app.semantic_memory_search_context(payload.session_id.as_deref(), input) {
                 Ok(output) => respond_json(
                     request,
                     StatusCode(200),
@@ -210,17 +207,12 @@ fn handle_semantic_memory_update(
 
 pub(super) fn handle_kv_list(app: &App, request: Request) -> std::io::Result<()> {
     let query = parse_query(request.url());
-    let Some(session_id) = query.get("session_id").filter(|value| !value.is_empty()) else {
-        return respond_json(
-            request,
-            StatusCode(400),
-            &ErrorResponse {
-                error: "session_id is required".to_string(),
-            },
-        );
-    };
+    let session_id = optional_query_value(&query, "session_id");
     let input = KvListInput {
-        scope: query.get("scope").cloned(),
+        scope: query
+            .get("scope")
+            .cloned()
+            .or_else(|| session_id.is_none().then(|| "operator".to_string())),
         prefix: query
             .get("prefix")
             .cloned()
@@ -232,7 +224,7 @@ pub(super) fn handle_kv_list(app: &App, request: Request) -> std::io::Result<()>
         ),
         offset: Some(query_usize(&query, "offset").unwrap_or(0)),
     };
-    match app.kv_list(session_id, input, unix_timestamp()) {
+    match app.kv_list_context(session_id, input, unix_timestamp()) {
         Ok(output) => respond_json(
             request,
             StatusCode(200),
@@ -258,7 +250,8 @@ pub(super) fn handle_kv_list(app: &App, request: Request) -> std::io::Result<()>
 pub(super) fn handle_kv_put(app: &App, mut request: Request) -> std::io::Result<()> {
     match parse_json_body::<KvPutRequest>(&mut request) {
         Ok(payload) => {
-            let input = KvPutInput {
+            let session_id = payload.session_id.as_deref();
+            let mut input = KvPutInput {
                 key: payload.key,
                 value: payload.value,
                 scope: payload.scope,
@@ -266,7 +259,10 @@ pub(super) fn handle_kv_put(app: &App, mut request: Request) -> std::io::Result<
                 expected_revision: payload.expected_revision,
                 ttl_seconds: payload.ttl_seconds,
             };
-            match app.kv_put(payload.session_id.as_str(), input, unix_timestamp()) {
+            if input.scope.is_none() && session_id.is_none() {
+                input.scope = Some("operator".to_string());
+            }
+            match app.kv_put_context(session_id, input, unix_timestamp()) {
                 Ok(output) => respond_json(
                     request,
                     StatusCode(200),
@@ -293,12 +289,16 @@ pub(super) fn handle_kv_put(app: &App, mut request: Request) -> std::io::Result<
 pub(super) fn handle_kv_delete(app: &App, mut request: Request) -> std::io::Result<()> {
     match parse_json_body::<KvDeleteRequest>(&mut request) {
         Ok(payload) => {
-            let input = KvDeleteInput {
+            let session_id = payload.session_id.as_deref();
+            let mut input = KvDeleteInput {
                 key: payload.key,
                 scope: payload.scope,
                 expected_revision: payload.expected_revision,
             };
-            match app.kv_delete(payload.session_id.as_str(), input) {
+            if input.scope.is_none() && session_id.is_none() {
+                input.scope = Some("operator".to_string());
+            }
+            match app.kv_delete_context(session_id, input) {
                 Ok(output) => respond_json(
                     request,
                     StatusCode(200),
@@ -388,6 +388,14 @@ fn parse_query(url: &str) -> BTreeMap<String, String> {
             Some((key, value))
         })
         .collect()
+}
+
+fn optional_query_value<'a>(query: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    query
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn percent_decode_query(input: &str) -> Result<String, ()> {

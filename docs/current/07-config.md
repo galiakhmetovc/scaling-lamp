@@ -642,7 +642,7 @@ export TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
 export TEAMD_OTLP_TIMEOUT_MS='2000'
 ```
 
-`scripts/deploy-teamd-containers.sh --with-jaeger` поднимает локальный Jaeger и upsert-ит эти env-переменные в `/etc/teamd/teamd.env`.
+`scripts/deploy-teamd-containers.sh --with-jaeger` поднимает локальный Jaeger и upsert-ит endpoint в `/etc/teamd/teamd.env`, но оставляет `TEAMD_OTLP_EXPORT_ENABLED='false'`. Автоэкспорт включается только явным изменением env/config; ручной `agentd trace push <trace_id>` продолжает работать через настроенный endpoint.
 
 Важно: exporter не отправляет raw prompts, transcript bodies или большие tool outputs. В spans попадают compact attributes и ссылки на локальные сущности (`session_id`, `run_id`, `tool_call_id`, `artifact_id`). Сбой OTLP export не ломает пользовательский turn, а пишется в `audit/runtime.jsonl`.
 

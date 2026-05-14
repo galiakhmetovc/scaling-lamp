@@ -1102,6 +1102,7 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
             .to_string()
             .contains("max_bytes")
     );
+    assert!(read.openai_function_schema().to_string().contains("path"));
 
     let list_call =
         ToolCall::from_openai_function("skill_list", r#"{"include_inactive":false,"limit":5}"#)
@@ -1115,13 +1116,16 @@ fn skill_tool_definitions_and_parsing_are_explicit() {
         })
     );
 
-    let read_call =
-        ToolCall::from_openai_function("skill_read", r#"{"name":"rust-debug","max_bytes":512}"#)
-            .expect("parse read");
+    let read_call = ToolCall::from_openai_function(
+        "skill_read",
+        r#"{"name":"rust-debug","path":"examples/setup.md","max_bytes":512}"#,
+    )
+    .expect("parse read");
     assert_eq!(
         read_call,
         ToolCall::SkillRead(super::SkillReadInput {
             name: "rust-debug".to_string(),
+            path: Some("examples/setup.md".to_string()),
             max_bytes: Some(512),
         })
     );

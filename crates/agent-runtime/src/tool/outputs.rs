@@ -315,8 +315,10 @@ pub struct SkillReadOutput {
     pub name: String,
     pub description: String,
     pub mode: String,
+    pub path: String,
     pub skill_dir: String,
     pub skill_md_path: String,
+    pub files: Vec<String>,
     pub body: String,
     pub body_byte_len: usize,
     pub body_truncated: bool,
@@ -1385,8 +1387,8 @@ impl ToolOutput {
                 }
             }
             Self::SkillRead(output) => format!(
-                "skill_read name={} mode={} bytes={} truncated={}",
-                output.name, output.mode, output.body_byte_len, output.body_truncated
+                "skill_read name={} path={} mode={} bytes={} truncated={}",
+                output.name, output.path, output.mode, output.body_byte_len, output.body_truncated
             ),
             Self::SkillEnable(output) => {
                 format!("skill_enable name={} mode={}", output.name, output.mode)
@@ -1960,8 +1962,10 @@ impl ToolOutput {
                 "name": output.name,
                 "description": output.description,
                 "mode": output.mode,
+                "path": output.path,
                 "skill_dir": output.skill_dir,
                 "skill_md_path": output.skill_md_path,
+                "files": output.files,
                 "body": output.body,
                 "body_byte_len": output.body_byte_len,
                 "body_truncated": output.body_truncated,

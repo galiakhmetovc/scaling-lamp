@@ -483,6 +483,15 @@ impl ExecutionService {
         self.search_semantic_memory(store, session_id, input)
     }
 
+    pub fn semantic_memory_search_for_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &MemorySearchInput,
+    ) -> Result<MemorySearchOutput, ExecutionError> {
+        self.search_semantic_memory_context(store, session_id, input)
+    }
+
     pub fn semantic_memory_list_for_session(
         &self,
         store: &PersistenceStore,
@@ -490,6 +499,15 @@ impl ExecutionService {
         input: &MemoryListInput,
     ) -> Result<MemoryListOutput, ExecutionError> {
         self.list_semantic_memories(store, session_id, input)
+    }
+
+    pub fn semantic_memory_list_for_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &MemoryListInput,
+    ) -> Result<MemoryListOutput, ExecutionError> {
+        self.list_semantic_memories_context(store, session_id, input)
     }
 
     pub fn semantic_memory_update(
@@ -516,6 +534,16 @@ impl ExecutionService {
         self.list_kv_entries(store, session_id, input, now)
     }
 
+    pub fn kv_list_for_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvListInput,
+        now: i64,
+    ) -> Result<KvListOutput, ExecutionError> {
+        self.list_kv_entries_context(store, session_id, input, now)
+    }
+
     pub fn kv_put_for_session(
         &self,
         store: &PersistenceStore,
@@ -526,6 +554,16 @@ impl ExecutionService {
         self.put_kv_entry(store, session_id, input, now)
     }
 
+    pub fn kv_put_for_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvPutInput,
+        now: i64,
+    ) -> Result<KvPutOutput, ExecutionError> {
+        self.put_kv_entry_context(store, session_id, input, now)
+    }
+
     pub fn kv_delete_for_session(
         &self,
         store: &PersistenceStore,
@@ -533,6 +571,15 @@ impl ExecutionService {
         input: &KvDeleteInput,
     ) -> Result<KvDeleteOutput, ExecutionError> {
         self.delete_kv_entry(store, session_id, input)
+    }
+
+    pub fn kv_delete_for_context(
+        &self,
+        store: &PersistenceStore,
+        session_id: Option<&str>,
+        input: &KvDeleteInput,
+    ) -> Result<KvDeleteOutput, ExecutionError> {
+        self.delete_kv_entry_context(store, session_id, input)
     }
 
     fn mirror_session_to_silverbullet_best_effort(

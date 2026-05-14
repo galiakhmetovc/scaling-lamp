@@ -439,6 +439,8 @@ pub struct AutonomyStateReadInput {
 pub struct SkillReadInput {
     pub name: String,
     #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
     pub max_bytes: Option<usize>,
 }
 

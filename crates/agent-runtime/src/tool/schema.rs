@@ -69,7 +69,7 @@ impl ToolName {
             }
             Self::AutonomyStateRead => r#"{"max_items":5,"include_inactive_schedules":false}"#,
             Self::SkillList => r#"{"include_inactive":true,"limit":20}"#,
-            Self::SkillRead => r#"{"name":"silverbullet","max_bytes":8000}"#,
+            Self::SkillRead => r#"{"name":"silverbullet","path":"SKILL.md","max_bytes":8000}"#,
             Self::SkillEnable => r#"{"name":"silverbullet"}"#,
             Self::SkillDisable => r#"{"name":"silverbullet"}"#,
             Self::SkillInstall => {
@@ -633,7 +633,8 @@ impl ToolName {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "Skill name from skill_list" },
-                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes from SKILL.md body to return" }
+                    "path": { "type": ["string", "null"], "description": "Optional relative path inside the skill directory. Defaults to SKILL.md. Use this to read examples, templates, scripts, or other files shipped with the skill. Absolute paths and .. are rejected." },
+                    "max_bytes": { "type": ["integer", "null"], "minimum": 1, "description": "Optional maximum UTF-8 bytes from the requested skill file to return" }
                 },
                 "required": ["name"],
                 "additionalProperties": false,

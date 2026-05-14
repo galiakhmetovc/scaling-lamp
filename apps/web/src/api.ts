@@ -165,7 +165,7 @@ export const api = {
     });
   },
   semanticMemoryList(
-    sessionId: string,
+    sessionId: string | null,
     options: { scope?: string; limit?: number; offset?: number } = {},
     signal?: AbortSignal
   ) {
@@ -182,7 +182,7 @@ export const api = {
     );
   },
   semanticMemorySearch(
-    sessionId: string,
+    sessionId: string | null,
     options: { query: string; scope?: string; limit?: number; filters?: unknown },
     signal?: AbortSignal
   ) {
@@ -214,7 +214,7 @@ export const api = {
     );
   },
   kvList(
-    sessionId: string,
+    sessionId: string | null,
     options: { scope?: string; prefix?: string; limit?: number; offset?: number } = {},
     signal?: AbortSignal
   ) {
@@ -232,7 +232,7 @@ export const api = {
     );
   },
   kvPut(
-    sessionId: string,
+    sessionId: string | null,
     input: {
       key: string;
       value: unknown;
@@ -255,7 +255,7 @@ export const api = {
       })
     });
   },
-  kvDelete(sessionId: string, input: { key: string; scope?: string; expected_revision?: number | null }) {
+  kvDelete(sessionId: string | null, input: { key: string; scope?: string; expected_revision?: number | null }) {
     return requestJson<{ key: string; deleted: boolean }>(endpoint("/v1/kv"), {
       method: "DELETE",
       body: JSON.stringify({

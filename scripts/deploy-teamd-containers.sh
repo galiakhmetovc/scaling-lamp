@@ -228,7 +228,8 @@ Options:
   --no-nats             Do not deploy local NATS JetStream.
   --no-searxng          Do not deploy SearXNG.
   --no-caddy            Do not deploy Caddy reverse proxy.
-  --with-jaeger         Also deploy Jaeger UI and enable agentd OTLP auto-export.
+  --with-jaeger         Also deploy Jaeger UI and configure agentd OTLP endpoint.
+                         agentd OTLP auto-export stays disabled by default.
   --with-mem0           Deploy Mem0/OpenMemory REST API and configure agentd memory_* tools.
   --with-silverbullet   Deploy SilverBullet editor over the canonical Markdown space.
   --with-silverbullet-mcp
@@ -873,7 +874,7 @@ configure_agentd_otlp_env() {
 
   if [ "$DRY_RUN" -eq 1 ]; then
     print_cmd mkdir -p "$env_parent"
-    print_cmd sh -c "upsert OTLP trace export defaults in $ENV_FILE"
+    print_cmd sh -c "upsert disabled OTLP trace export defaults in $ENV_FILE"
     return 0
   fi
 
@@ -894,7 +895,7 @@ configure_agentd_otlp_env() {
   {
     cat "$tmp_env"
     [ ! -s "$tmp_env" ] || printf '\n'
-    printf 'TEAMD_OTLP_EXPORT_ENABLED=%s\n' "$(quote_arg "true")"
+    printf 'TEAMD_OTLP_EXPORT_ENABLED=%s\n' "$(quote_arg "false")"
     printf 'TEAMD_OTLP_ENDPOINT=%s\n' "$(quote_arg "$otlp_endpoint")"
     printf 'TEAMD_OTLP_TIMEOUT_MS=%s\n' "$(quote_arg "$OTLP_EXPORT_TIMEOUT_MS")"
   } > "$tmp_new"
@@ -2589,9 +2590,9 @@ if [ "$ENABLE_JAEGER" -eq 1 ]; then
     Compose: $JAEGER_COMPOSE
     Start command: docker compose -f $JAEGER_COMPOSE up -d
     Storage: $JAEGER_DATA_DIR
-    agentd OTLP auto-export:
+    agentd OTLP endpoint:
       Env file: $ENV_FILE
-      TEAMD_OTLP_EXPORT_ENABLED=true
+      TEAMD_OTLP_EXPORT_ENABLED=false
       TEAMD_OTLP_ENDPOINT=http://127.0.0.1:$JAEGER_OTLP_HTTP_PORT/v1/traces
       TEAMD_OTLP_TIMEOUT_MS=$OTLP_EXPORT_TIMEOUT_MS
 EOF

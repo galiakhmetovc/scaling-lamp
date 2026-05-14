@@ -19,7 +19,7 @@
 - `trace export` выдаёт OTLP-compatible JSON payload для локального анализа;
 - `trace push` отправляет trace в configured OTLP/HTTP endpoint;
 - `observability.otlp_export_enabled=true` включает best-effort auto-export completed run traces;
-- `deploy-teamd-containers.sh --with-jaeger` поднимает `teamd-jaeger` и включает auto-export через `/etc/teamd/teamd.env`.
+- `deploy-teamd-containers.sh --with-jaeger` поднимает `teamd-jaeger` и настраивает OTLP endpoint, но автоэкспорт оставляет выключенным до явного включения оператором.
 
 ## Проблема
 
@@ -251,7 +251,7 @@ teamdctl trace push <trace_id>
 
 `trace export` намеренно не отправляет данные наружу. Он печатает OTLP JSON payload с `resourceSpans`, `scopeSpans`, `traceId`, `spanId`, `parentSpanId`, `name`, `kind`, `attributes` и timestamp-полями. `trace push` отправляет тот же payload через OTLP/HTTP.
 
-Включить auto-export:
+Включить auto-export вручную:
 
 ```toml
 [observability]
@@ -265,6 +265,8 @@ otlp_timeout_ms = 2000
 ```bash
 ./scripts/deploy-teamd-containers.sh --with-jaeger
 ```
+
+Важно: сам `--with-jaeger` сейчас не включает постоянную отправку traces из agentd. Он нужен для UI/receiver и ручного `agentd trace push <trace_id>`.
 
 Auto-export выполняется best-effort после завершения run. Если Jaeger недоступен, пользовательский turn не падает: ошибка записывается в `audit/runtime.jsonl` как `component=otel`, `op=export`, `outcome=error`.
 

@@ -118,13 +118,15 @@ AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser open https://exampl
 AGENT_BROWSER_CDP="$TEAMD_BROWSERLESS_CDP_URL" agent-browser snapshot -i -c
 ```
 
-`--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает в `/etc/teamd/teamd.env`:
+`--with-jaeger` ставит `teamd-jaeger`, включает OTLP receiver и прописывает endpoint в `/etc/teamd/teamd.env`. Автоэкспорт в agentd по умолчанию отключён:
 
 ```bash
-TEAMD_OTLP_EXPORT_ENABLED='true'
+TEAMD_OTLP_EXPORT_ENABLED='false'
 TEAMD_OTLP_ENDPOINT='http://127.0.0.1:4318/v1/traces'
 TEAMD_OTLP_TIMEOUT_MS='2000'
 ```
+
+Для разовой отправки используй `agentd trace push <trace_id>`. Постоянный автоэкспорт включай только явно через `TEAMD_OTLP_EXPORT_ENABLED='true'`.
 
 После этого completed run traces автоматически экспортируются best-effort. UI без домена: `http://127.0.0.1:16686/jaeger/` напрямую или `http://127.0.0.1:8088/jaeger/` через Caddy. С `TEAMD_CADDY_DOMAIN` используется `https://jaeger.<domain>/`.
 

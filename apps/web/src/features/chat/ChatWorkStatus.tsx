@@ -52,7 +52,8 @@ export function ChatWorkStatus({
         </Typography>
         {status.latestTool ? (
           <Typography variant="caption" color="text.secondary" className="mono">
-            {status.latestTool.tool_name} · {formatTime(status.latestTool.updated_at)} · {short(status.latestTool.run_id, 20)}
+            {status.latestTool.tool_name} · старт: {formatTime(status.latestTool.requested_at)} · обновлено:{" "}
+            {formatTime(status.latestTool.updated_at)} · {short(status.latestTool.run_id, 20)}
           </Typography>
         ) : null}
         {status.latestApproval ? (

@@ -476,7 +476,7 @@ impl From<MemoryItemOutput> for SemanticMemoryItemResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SemanticMemorySearchRequest {
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub query: String,
     pub scope: Option<String>,
     pub limit: Option<usize>,
@@ -562,7 +562,7 @@ pub struct KvListResponse {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KvPutRequest {
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub key: String,
     #[serde(default)]
     pub value: Value,
@@ -580,7 +580,7 @@ pub struct KvPutResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KvDeleteRequest {
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub key: String,
     pub scope: Option<String>,
     pub expected_revision: Option<i64>,
