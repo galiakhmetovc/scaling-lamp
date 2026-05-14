@@ -531,7 +531,7 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 
 ### `[knowledge]`
 
-Управляет operator context и SilverBullet-интеграцией, которая попадает в канонический prompt через `SessionHead` и используется для best-effort зеркала сессий.
+Управляет operator context и SilverBullet-интеграцией, которая попадает в канонический prompt через `SessionHead`. Runtime mirror в SilverBullet выключен по умолчанию: live/status state надо смотреть через Telegram status, web UI, traces, transcripts, tool ledger и artifacts.
 
 Параметры:
 
@@ -539,7 +539,7 @@ export TEAMD_MEM0_COLLECTION_NAME='teamd_memories_fastembed_384'
 - `silverbullet_space_dir` — путь к canonical SilverBullet Space на диске.
 - `silverbullet_base_url` — optional browser URL; сейчас используется как операторская подсказка/документация, а не как источник runtime state.
 - `silverbullet_journal_context_enabled` — включает bounded чтение `journals/<today>.md` и `journals/<yesterday>.md` в `SessionHead`.
-- `silverbullet_mirror_enabled` — включает best-effort запись runtime mirror pages в SilverBullet Space.
+- `silverbullet_mirror_enabled` — включает best-effort запись runtime mirror pages в SilverBullet Space; production default `false`.
 - `silverbullet_session_area_path` — относительный путь index page для зеркал сессий.
 - `silverbullet_text_artifact_extensions` и `silverbullet_script_artifact_extensions` — какие artifact-файлы можно inline'ить в mirror page как текст/скрипт.
 - `source_files`, `source_dirs`, `allowed_extensions`, `max_file_bytes` — канонические корни и размерный лимит для `knowledge_search`/`knowledge_read`. Это больше не зашито в коде: можно менять, какие файлы и папки workspace индексируются как project knowledge.
@@ -554,7 +554,7 @@ operator_timezone = "Europe/Moscow"
 silverbullet_space_dir = "/var/lib/teamd/knowledge/silverbullet/teamd"
 # silverbullet_base_url = "https://teamd.example/sb"
 silverbullet_journal_context_enabled = true
-silverbullet_mirror_enabled = true
+silverbullet_mirror_enabled = false
 silverbullet_session_area_path = "a/teamd-agents.md"
 silverbullet_text_artifact_extensions = [
   "bash", "css", "csv", "html", "js", "json", "lua", "md", "py", "rs",
@@ -602,7 +602,7 @@ export TEAMD_OPERATOR_TIMEZONE='Europe/Moscow'
 export TEAMD_SILVERBULLET_SPACE_DIR='/var/lib/teamd/knowledge/silverbullet/teamd'
 export TEAMD_SILVERBULLET_BASE_URL='https://teamd.example/sb'
 export TEAMD_SILVERBULLET_JOURNAL_CONTEXT_ENABLED='true'
-export TEAMD_SILVERBULLET_MIRROR_ENABLED='true'
+export TEAMD_SILVERBULLET_MIRROR_ENABLED='false'
 ```
 
 Как это работает:
@@ -610,10 +610,10 @@ export TEAMD_SILVERBULLET_MIRROR_ENABLED='true'
 - `data_dir/USER.md` создаётся из встроенного template при первом чтении и потом редактируется оператором без пересборки бинаря;
 - `USER.md` попадает в `SessionHead` bounded-блоком `Operator Context`;
 - если включён journal context и space существует, runtime читает today/yesterday daily notes из `journals/YYYY-MM-DD.md` с учётом `operator_timezone`;
-- если включён mirror и space существует, runtime после успешных chat/wakeup/inter-agent/approval turns и compaction пишет человекочитаемые pages в `silverbullet_session_area_path` и `p/teamd-session-<session_id>.md`;
+- если оператор явно включает mirror и space существует, runtime после успешных chat/wakeup/inter-agent/approval turns и compaction пишет человекочитаемые pages в `silverbullet_session_area_path` и `p/teamd-session-<session_id>.md`;
 - `knowledge_search` индексирует только `source_files` и файлы из `source_dirs` с расширениями из `allowed_extensions`, затем ищет по PostgreSQL full-text search;
 - unreadable/stale/non-UTF8 файлы в этих roots пропускаются при обновлении индекса;
-- SilverBullet mirror не является источником истины: plan, transcript, tool calls, artifacts и schedules остаются в `agentd` state, а page нужен для прозрачного просмотра и ручных заметок.
+- SilverBullet mirror не является источником истины: plan, transcript, tool calls, artifacts и schedules остаются в `agentd` state. По умолчанию mirror выключен, чтобы агент не транслировал transient runtime status в базу заметок.
 
 ### `[observability]`
 

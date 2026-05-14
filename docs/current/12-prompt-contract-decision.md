@@ -158,9 +158,9 @@ Prompt получает только ссылку и summary, а не весь a
 
 ### SilverBullet Session Mirror
 
-`SilverBullet Session Mirror` — человекочитаемая Markdown page под `p/teamd-session-<session_id>.md`.
+`SilverBullet Session Mirror` — optional человекочитаемая Markdown page под `p/teamd-session-<session_id>.md`.
 
-Runtime пишет туда best-effort snapshot: plan, context summary, recent tool activity и artifacts. Mirror не является runtime source of truth и не заменяет PostgreSQL/transcripts/artifacts/tool-call ledger.
+Runtime пишет туда best-effort snapshot: plan, context summary, recent tool activity и artifacts только если оператор явно включил `[knowledge].silverbullet_mirror_enabled = true`. Production default выключает mirror, чтобы transient status/progress не попадал в SilverBullet. Mirror не является runtime source of truth и не заменяет PostgreSQL/transcripts/artifacts/tool-call ledger.
 
 ## Инварианты, которые стоит закрепить
 
@@ -501,7 +501,7 @@ Decision D3: где должны стоять active skills в порядке pr
 - provider/model/think level и context window данные;
 - workspace root;
 - SilverBullet today/yesterday journal excerpts, если включено;
-- SilverBullet session mirror path, если включено;
+- SilverBullet session mirror path, если оператор явно включил mirror;
 - message count;
 - context tokens;
 - compactifications;
@@ -547,7 +547,7 @@ Decision D3: где должны стоять active skills в порядке pr
 | Operator context | Есть | Да, язык/timezone/операторские правила. | Средний: нельзя раздувать USER.md. |
 | Runtime provider/model/context | Есть | Да, модель понимает ограничения. | Малый. |
 | SilverBullet journal context | Есть | Да, ежедневный рабочий контекст. | Средний: только bounded excerpts. |
-| SilverBullet mirror path | Есть | Да, указывает inspectable page. | Малый. |
+| SilverBullet mirror path | Выключено по умолчанию | Полезно только при явно включённом mirror. | Малый, но может поощрять запись transient status в заметки. |
 | Schedule summary | Есть | Да, особенно для Telegram reminders/wakeup. | Малый, если коротко. |
 | Message count | Есть | Средняя, помогает понять размер истории. | Малый. |
 | Context tokens | Есть | Средняя, но estimate может путать. | Средний. |
@@ -574,7 +574,7 @@ Decision D3: где должны стоять active skills в порядке pr
 - provider, model and think level;
 - context window, auto-compaction trigger ratio, usable context budget, estimated prompt usage;
 - bounded SilverBullet today/yesterday journal excerpts;
-- SilverBullet session mirror path;
+- SilverBullet session mirror path, только если mirror явно включён;
 - turn source: direct, Telegram, schedule, inter-agent, wakeup, approval continuation;
 - compactification state;
 - pending approvals, если есть;

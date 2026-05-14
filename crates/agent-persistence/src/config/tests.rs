@@ -1462,6 +1462,8 @@ fn load_uses_safe_local_daemon_defaults() {
     assert_eq!(config.daemon.skills_dir, PathBuf::from("skills"));
     assert_eq!(config.daemon.public_base_url, None);
     assert!(config.daemon.a2a_peers.is_empty());
+    assert!(config.knowledge.silverbullet_journal_context_enabled);
+    assert!(!config.knowledge.silverbullet_mirror_enabled);
 }
 
 #[test]

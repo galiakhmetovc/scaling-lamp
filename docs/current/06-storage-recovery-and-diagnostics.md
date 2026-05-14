@@ -47,7 +47,7 @@
 
 `/var/lib/teamd/state` — runtime `data_dir`. Если daemon, Telegram worker и CLI смотрят в разные `data_dir`, вы получите разные sessions, pairings и transcripts. Поэтому для production-like запуска все systemd services и ручные команды должны использовать один и тот же `TEAMD_DATA_DIR=/var/lib/teamd/state`.
 
-`/var/lib/teamd/knowledge/silverbullet/teamd` — external knowledge space, если включён SilverBullet add-on. Это не `data_dir`: runtime state остаётся в PostgreSQL + payload layout, а SilverBullet получает daily notes и best-effort human-readable session mirrors.
+`/var/lib/teamd/knowledge/silverbullet/teamd` — external knowledge space, если включён SilverBullet add-on. Это не `data_dir`: runtime state остаётся в PostgreSQL + payload layout. SilverBullet получает daily notes/context; human-readable session mirrors пишутся только если оператор явно включил mirror.
 
 ## Disk usage и maintenance prune
 
@@ -132,10 +132,10 @@ SilverBullet Space конфигурируется через `[knowledge].silver
 | Path | Что это | Источник истины |
 | --- | --- | --- |
 | `journals/YYYY-MM-DD.md` | Daily journal оператора/агента. Today/yesterday excerpts могут попадать в `SessionHead`. | SilverBullet note. |
-| `a/teamd-agents.md` | Area index для generated session mirror pages. | SilverBullet mirror/index, не runtime state. |
-| `p/teamd-session-<session_id>.md` | Best-effort mirror сессии: plan snapshot, context summary, recent tool activity, artifacts. | `agentd` остаётся source of truth; page только view. |
+| `a/teamd-agents.md` | Optional area index для generated session mirror pages, только если mirror явно включён. | SilverBullet mirror/index, не runtime state. |
+| `p/teamd-session-<session_id>.md` | Optional best-effort mirror сессии: plan snapshot, context summary, recent tool activity, artifacts. По умолчанию выключен. | `agentd` остаётся source of truth; page только view. |
 
-Mirror pages можно читать и дополнять операторскими заметками, но ручная правка mirror не меняет runtime plan/transcripts/tool calls. Если нужно изменить runtime state, используйте соответствующие teamD tools/commands.
+Mirror pages можно читать и дополнять операторскими заметками, но ручная правка mirror не меняет runtime plan/transcripts/tool calls. Runtime не должен писать transient status/progress в SilverBullet, если mirror выключен. Если нужно изменить runtime state, используйте соответствующие teamD tools/commands.
 
 ## Жизненный цикл session
 
@@ -169,13 +169,13 @@ Runtime меняет только `sessions.title`; `session_id`, transcript, to
 
 Канонический artifact store остаётся в PostgreSQL + `artifacts/`. Telegram documents, screenshots, generated files и offload payloads получают `artifact_id`; читать и доставлять их нужно через `agentd session ...`, `/files`, `/file <artifact_id>` или соответствующие tools.
 
-Если включён SilverBullet mirror, runtime best-effort пишет человекочитаемую page:
+Если оператор явно включил SilverBullet mirror, runtime best-effort пишет человекочитаемую page:
 
 ```text
 /var/lib/teamd/knowledge/silverbullet/teamd/p/teamd-session-<session_id>.md
 ```
 
-Mirror должен помогать оператору видеть plan snapshot, context summary, tool activity и artifacts в браузере. Он не заменяет canonical ledger: ручная правка mirror не меняет runtime plan, transcript или result ledger.
+Mirror должен помогать оператору видеть plan snapshot, context summary, tool activity и artifacts в браузере. Он не заменяет canonical ledger: ручная правка mirror не меняет runtime plan, transcript или result ledger. Production default выключает mirror, чтобы live status оставался в Telegram/web/traces/tool ledger, а не в базе заметок.
 
 ## Что хранит PostgreSQL
 

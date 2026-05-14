@@ -657,7 +657,7 @@ impl Default for KnowledgeConfig {
             silverbullet_space_dir: Some(PathBuf::from(DEFAULT_SILVERBULLET_SPACE_DIR)),
             silverbullet_base_url: None,
             silverbullet_journal_context_enabled: true,
-            silverbullet_mirror_enabled: true,
+            silverbullet_mirror_enabled: false,
             silverbullet_session_area_path: PathBuf::from("a/teamd-agents.md"),
             silverbullet_text_artifact_extensions: vec![
                 "bash".to_string(),
