@@ -34,13 +34,22 @@ import type {
   SessionSummary
 } from "../../types";
 import { formatTime, short } from "../../utils/format";
-import { describeMemoryLayer, jsonPreview, memoryScopeRequiresSession, memoryScopes, parseJsonInput, type MemoryScope } from "./memoryModel";
+import {
+  describeMemoryLayer,
+  describeMemoryScope,
+  jsonPreview,
+  memoryScopeRequiresSession,
+  memoryScopes,
+  parseJsonInput,
+  type MemoryScope
+} from "./memoryModel";
 
 type MemoryTab = "recall" | "semantic" | "kv" | "boundary";
 
-export function MemoryScreen({ selectedSession }: { selectedSession: SessionSummary | null }) {
+export function MemoryScreen({ selectedSession, sessions }: { selectedSession: SessionSummary | null; sessions: SessionSummary[] }) {
   const [tab, setTab] = useState<MemoryTab>("recall");
   const [scope, setScope] = useState<MemoryScope>("operator");
+  const [contextSessionId, setContextSessionId] = useState(selectedSession?.id ?? "");
   const [memoryQuery, setMemoryQuery] = useState("");
   const [recallQuery, setRecallQuery] = useState("");
   const [memoryOffset, setMemoryOffset] = useState(0);
@@ -59,9 +68,14 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const sessionId = selectedSession?.id ?? null;
+  const contextSessionOptions = selectedSession && !sessions.some((session) => session.id === selectedSession.id) ? [selectedSession, ...sessions] : sessions;
+  const contextSession =
+    contextSessionOptions.find((session) => session.id === contextSessionId) ?? selectedSession ?? contextSessionOptions[0] ?? null;
+  const sessionId = memoryScopeRequiresSession(scope) ? contextSession?.id ?? null : null;
+  const recallSessionId = contextSession?.id ?? null;
   const scopeNeedsSession = memoryScopeRequiresSession(scope);
   const scopeAvailable = !scopeNeedsSession || Boolean(sessionId);
+  const scopeDescription = describeMemoryScope(scope);
 
   async function load(signal?: AbortSignal) {
     if (!scopeAvailable) {
@@ -78,7 +92,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
       const [nextSemanticList, nextKvList, nextRecall] = await Promise.all([
         api.semanticMemoryList(sessionId, { scope, limit: 20, offset: memoryOffset }, signal),
         api.kvList(sessionId, { scope, prefix: kvPrefix, limit: 50, offset: kvOffset }, signal),
-        sessionId ? api.memoryRecallPreview(sessionId, recallQuery, signal) : Promise.resolve(null)
+        recallSessionId ? api.memoryRecallPreview(recallSessionId, recallQuery, signal) : Promise.resolve(null)
       ]);
       setSemanticList(nextSemanticList);
       setSemanticSearch(null);
@@ -193,10 +207,26 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
   }
 
   useEffect(() => {
+    if (selectedSession?.id) {
+      setContextSessionId(selectedSession.id);
+    }
+  }, [selectedSession?.id]);
+
+  useEffect(() => {
+    setContextSessionId((current) => {
+      const options = selectedSession && !sessions.some((session) => session.id === selectedSession.id) ? [selectedSession, ...sessions] : sessions;
+      if (current && options.some((session) => session.id === current)) {
+        return current;
+      }
+      return options[0]?.id ?? "";
+    });
+  }, [selectedSession, sessions]);
+
+  useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [sessionId, scope, memoryOffset, kvOffset]);
+  }, [sessionId, recallSessionId, scope, memoryOffset, kvOffset]);
 
   const semanticRows = semanticSearch?.results ?? semanticList?.results ?? [];
 
@@ -204,7 +234,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
     <Stack spacing={2}>
       <SectionHeader
         title="Память"
-        subtitle="Операторский доступ ко всей Mem0 semantic memory и scoped KV. Сессия нужна только для workspace/agent/session scopes и recall preview."
+        subtitle="Операторский доступ к трём основным слоям: operator, agent, agent_shared. Эти scopes всегда видны; agent выбирается через context session."
         action={
           <Button variant="outlined" disabled={loading} onClick={() => void load()}>
             Обновить
@@ -214,23 +244,51 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
       {error ? <Alert severity="error">{error}</Alert> : null}
       {!scopeAvailable ? (
         <Alert severity="info">
-          Scope `{scope}` вычисляется от выбранной сессии. Выбери сессию или переключись на `operator`/`agent_shared`, чтобы смотреть глобальную
-          память без привязки к чату.
+          Scope `agent` вычисляется от agent profile выбранной context session. Выбери сессию агента, чтобы смотреть его личную память.
         </Alert>
       ) : null}
 
       <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ xs: "stretch", md: "center" }}>
-          <TextField select size="small" label="Scope" value={scope} onChange={(event) => setScope(event.target.value as MemoryScope)} sx={{ minWidth: 180 }}>
+        <Stack spacing={1.5}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ xs: "stretch", md: "center" }}>
+            <TextField select size="small" label="Scope" value={scope} onChange={(event) => setScope(event.target.value as MemoryScope)} sx={{ minWidth: 180 }}>
+              {memoryScopes.map((item) => (
+                <MenuItem key={item} value={item}>
+                  {item}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
+              label="Agent context"
+              value={contextSession?.id ?? ""}
+              onChange={(event) => setContextSessionId(event.target.value)}
+              helperText="Нужен для agent scope и recall preview"
+              sx={{ minWidth: { xs: "100%", md: 360 } }}
+            >
+              {contextSessionOptions.length === 0 ? (
+                <MenuItem value="" disabled>
+                  Нет доступных сессий
+                </MenuItem>
+              ) : null}
+              {contextSessionOptions.map((session) => (
+                <MenuItem key={session.id} value={session.id}>
+                  {session.title} · {session.agent_name} · {formatTime(session.updated_at)}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Chip label={`scope: ${scope}`} color="primary" variant="outlined" />
+            {contextSession ? <Chip label={`agent: ${contextSession.agent_profile_id}`} variant="outlined" /> : null}
+          </Stack>
+          <Typography variant="body2" color="text.secondary">
+            {scopeDescription}
+          </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             {memoryScopes.map((item) => (
-              <MenuItem key={item} value={item}>
-                {item}
-              </MenuItem>
+              <Chip key={item} label={`${item}: ${describeMemoryScope(item)}`} variant={item === scope ? "filled" : "outlined"} color={item === scope ? "primary" : "default"} />
             ))}
-          </TextField>
-          <Chip label={selectedSession ? `context session: ${short(selectedSession.id, 24)}` : "context session: not required"} variant="outlined" />
-          {selectedSession ? <Chip label={`agent: ${selectedSession.agent_profile_id}`} variant="outlined" /> : null}
-          <Chip label={`scope: ${scope}`} color="primary" variant="outlined" />
+          </Stack>
         </Stack>
       </Paper>
 
@@ -249,7 +307,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
         </Tabs>
       </Paper>
 
-      {tab === "recall" && sessionId ? (
+      {tab === "recall" && recallSessionId ? (
         <RecallPreviewPane
           query={recallQuery}
           preview={recallPreview}
@@ -257,7 +315,7 @@ export function MemoryScreen({ selectedSession }: { selectedSession: SessionSumm
           onRefresh={() => void load()}
         />
       ) : null}
-      {tab === "recall" && !sessionId ? (
+      {tab === "recall" && !recallSessionId ? (
         <EmptyState title="Recall preview требует сессию" detail="Memory recall показывает, что будет подмешано в prompt конкретного чата." />
       ) : null}
       {tab === "semantic" ? (

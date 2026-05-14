@@ -673,7 +673,7 @@ export function App() {
       case "files":
         return <FilesScreen selectedSession={selectedSession} sessions={sessions} agents={snapshot?.agents ?? []} />;
       case "memory":
-        return <MemoryScreen selectedSession={selectedSession} />;
+        return <MemoryScreen selectedSession={selectedSession} sessions={sessions} />;
       case "skills":
         return <SkillsScreen selectedSession={selectedSession} />;
       case "agents":

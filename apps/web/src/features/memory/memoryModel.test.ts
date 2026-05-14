@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { describeMemoryLayer, jsonPreview, memoryScopeRequiresSession, parseJsonInput } from "./memoryModel.ts";
+import { describeMemoryLayer, describeMemoryScope, jsonPreview, memoryScopeRequiresSession, memoryScopes, parseJsonInput } from "./memoryModel.ts";
 
 describe("memoryModel", () => {
   it("renders bounded JSON previews", () => {
@@ -20,10 +20,15 @@ describe("memoryModel", () => {
   });
 
   it("distinguishes global and session-context memory scopes", () => {
+    assert.deepEqual([...memoryScopes], ["operator", "agent", "agent_shared"]);
     assert.equal(memoryScopeRequiresSession("operator"), false);
-    assert.equal(memoryScopeRequiresSession("agent_shared"), false);
-    assert.equal(memoryScopeRequiresSession("workspace"), true);
     assert.equal(memoryScopeRequiresSession("agent"), true);
-    assert.equal(memoryScopeRequiresSession("session"), true);
+    assert.equal(memoryScopeRequiresSession("agent_shared"), false);
+  });
+
+  it("describes the three visible memory scopes", () => {
+    assert.match(describeMemoryScope("operator"), /предпочт/);
+    assert.match(describeMemoryScope("agent"), /конкретного агента/);
+    assert.match(describeMemoryScope("agent_shared"), /роя/);
   });
 });

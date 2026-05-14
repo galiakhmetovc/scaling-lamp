@@ -1,9 +1,19 @@
-export const memoryScopes = ["operator", "workspace", "agent", "agent_shared", "session"] as const;
+export const memoryScopes = ["operator", "agent", "agent_shared"] as const;
 
 export type MemoryScope = (typeof memoryScopes)[number];
 
 export function memoryScopeRequiresSession(scope: MemoryScope): boolean {
-  return scope === "workspace" || scope === "agent" || scope === "session";
+  return scope === "agent";
+}
+
+export function describeMemoryScope(scope: MemoryScope): string {
+  if (scope === "operator") {
+    return "Долгосрочная память об операторе: предпочтения, рабочие привычки, постоянный личный контекст.";
+  }
+  if (scope === "agent") {
+    return "Опыт и настройки конкретного агента. В текущем API определяется через agent profile выбранной context session.";
+  }
+  return "Общая память runtime/роя: факты и договорённости, доступные всем агентам.";
 }
 
 export function jsonPreview(value: unknown, maxLength = 180): string {
