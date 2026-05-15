@@ -42,7 +42,7 @@ use agent_runtime::run::{ApprovalRequest, ProviderLoopState, RunStepKind};
 use agent_runtime::session::{MessageRole, PromptBudgetPolicy, TranscriptEntry};
 use agent_runtime::skills::{
     SessionSkillStatus, SkillActivationMode, SkillCatalog, SkillSummary, parse_skill_document,
-    resolve_session_skill_status, scan_skill_catalog_with_overrides,
+    resolve_session_skill_status, scan_skill_catalog,
 };
 use agent_runtime::tool::{
     AddTaskNoteOutput, AddTaskOutput, DeliverFileInput, DeliverFileOutput, EditTaskOutput,
@@ -532,14 +532,14 @@ impl ExecutionService {
     ) -> Result<SkillCatalog, ExecutionError> {
         let agent_skills_dir =
             agents::agent_home(&self.config.data_dir, agent_profile_id).join("skills");
-        scan_skill_catalog_with_overrides(&self.config.skills_dir, Some(agent_skills_dir.as_path()))
-            .map_err(|source| ExecutionError::ProviderLoop {
+        scan_skill_catalog(agent_skills_dir.as_path()).map_err(|source| {
+            ExecutionError::ProviderLoop {
                 reason: format!(
-                    "failed to scan merged skills catalog at {} and {}: {source}",
-                    self.config.skills_dir.display(),
+                    "failed to scan agent workspace skills catalog at {}: {source}",
                     agent_skills_dir.display()
                 ),
-            })
+            }
+        })
     }
 
     fn session_skill_statuses(
@@ -1202,16 +1202,13 @@ impl ExecutionService {
             .map_err(ExecutionError::RecordConversion)?;
         let agent_skills_dir =
             agents::agent_home(&self.config.data_dir, &session.agent_profile_id).join("skills");
-        let skills_catalog = scan_skill_catalog_with_overrides(
-            &self.config.skills_dir,
-            Some(agent_skills_dir.as_path()),
-        )
-        .map_err(|source| ExecutionError::ProviderLoop {
-            reason: format!(
-                "failed to scan merged skills catalog at {} and {}: {source}",
-                self.config.skills_dir.display(),
-                agent_skills_dir.display()
-            ),
+        let skills_catalog = scan_skill_catalog(agent_skills_dir.as_path()).map_err(|source| {
+            ExecutionError::ProviderLoop {
+                reason: format!(
+                    "failed to scan agent workspace skills catalog at {}: {source}",
+                    agent_skills_dir.display()
+                ),
+            }
         })?;
         let active_skill_status = resolve_session_skill_status(
             &skills_catalog,

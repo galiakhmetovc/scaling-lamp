@@ -30,17 +30,19 @@ fn test_config() -> (tempfile::TempDir, AppConfig) {
 
 #[test]
 fn process_cli_routes_status_and_session_skills_over_remote_daemon() {
-    let (temp, mut config) = test_config();
-    let skills_dir = temp.path().join("skills");
+    let (_temp, config) = test_config();
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
     std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("create skill dir");
     std::fs::write(
         skills_dir.join("rust-debug").join("SKILL.md"),
         "---\nname: rust-debug\ndescription: Debug Rust compiler errors.\n---\n\n# rust-debug\n",
     )
     .expect("write skill");
-    config.daemon.skills_dir = skills_dir;
 
-    let app = bootstrap::build_from_config(config.clone()).expect("build app");
     let session = app
         .create_session_auto(Some("Daemon CLI Session"))
         .expect("create session");
@@ -105,14 +107,13 @@ fn process_cli_routes_agent_profile_commands_over_remote_daemon() {
     .expect("remote agent list");
     let list_output = String::from_utf8(list_output).expect("utf8");
     assert!(list_output.contains("default"));
-    assert!(list_output.contains("judge"));
 
     let mut create_output = Vec::new();
     cli::execute_process_with_io(
         &app,
         base_args
             .into_iter()
-            .chain(["agent", "create", "Remote Reviewer", "from", "judge"]),
+            .chain(["agent", "create", "Remote Reviewer"]),
         &mut Cursor::new(Vec::<u8>::new()),
         &mut create_output,
     )
@@ -139,17 +140,19 @@ fn process_cli_routes_agent_profile_commands_over_remote_daemon() {
 
 #[test]
 fn process_cli_chat_repl_uses_remote_daemon_for_skill_commands() {
-    let (temp, mut config) = test_config();
-    let skills_dir = temp.path().join("skills");
+    let (_temp, config) = test_config();
+    let app = bootstrap::build_from_config(config.clone()).expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
     std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("create skill dir");
     std::fs::write(
         skills_dir.join("rust-debug").join("SKILL.md"),
         "---\nname: rust-debug\ndescription: Debug Rust compiler errors.\n---\n\n# rust-debug\n",
     )
     .expect("write skill");
-    config.daemon.skills_dir = skills_dir;
 
-    let app = bootstrap::build_from_config(config.clone()).expect("build app");
     let session = app
         .create_session_auto(Some("Remote REPL Session"))
         .expect("create session");

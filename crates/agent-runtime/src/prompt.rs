@@ -128,7 +128,7 @@ impl SessionHead {
             format!("Compactifications: {}", self.compactifications),
         ];
         if let Some(agent_home) = self.agent_home.as_deref() {
-            lines.push(format!("Agent Home: {agent_home}"));
+            lines.push(format!("Agent Workspace: {agent_home}"));
         }
         if let Some(provider_name) = self.provider_name.as_deref() {
             lines.push(format!("Provider: {provider_name}"));
@@ -1038,7 +1038,7 @@ mod tests {
         assert!(rendered.contains("Session: Compacted Chat"));
         assert!(rendered.contains("Session ID: session-1"));
         assert!(rendered.contains("Agent: Judge (judge)"));
-        assert!(rendered.contains("Agent Home: /state/agents/judge"));
+        assert!(rendered.contains("Agent Workspace: /state/agents/judge"));
         assert!(rendered.contains("Provider: zai"));
         assert!(rendered.contains("Model: glm-5-turbo"));
         assert!(rendered.contains("Think Level: off"));

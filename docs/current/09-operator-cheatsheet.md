@@ -145,14 +145,14 @@ sudo systemctl restart teamd-daemon.service teamd-telegram.service
 
 ## Agent profiles
 
-Agent profile — это durable профиль поведения, а не отдельный running process. Он содержит `SYSTEM.md`, `AGENTS.md`, локальные `skills/`, allowlist tools и свой default workspace.
+Agent profile — это durable профиль поведения, а не отдельный running process. Он содержит `SYSTEM.md`, `AGENTS.md`, `skills/`, allowlist tools и свой workspace. Встроенный template один: `default`.
 
 Базовые команды:
 
 ```bash
 teamdctl agent list
 teamdctl agent show default
-teamdctl agent create "Reviewer" from judge
+teamdctl agent create "Reviewer"
 teamdctl agent select Reviewer
 teamdctl agent open Reviewer
 ```
@@ -160,8 +160,7 @@ teamdctl agent open Reviewer
 После `agent create` runtime создаёт:
 
 ```text
-/var/lib/teamd/state/agents/<agent_id>/        # prompts и локальные skills
-/var/lib/teamd/workspaces/agents/<agent_id>/   # рабочая директория tools для новых session этого агента
+/var/lib/teamd/workspaces/agents/<agent_id>/   # SYSTEM.md, AGENTS.md, skills/ и рабочая директория tools
 ```
 
 Новая session берёт выбранный `Agent profile` и сохраняет конкретный `workspace_root` в session. Старые session не мигрируют автоматически.
@@ -180,13 +179,12 @@ teamdctl session disable-skill <session_id> <skill_name>
 
 Как activation работает внутри runtime:
 
-- global catalog берётся из configured `skills_dir`;
-- agent-local overrides берутся из `agent_home/skills/`;
+- catalog берётся из `workspaces/agents/<agent_id>/skills/`;
 - manual enable/disable хранится в `SessionSettings`;
 - automatic activation сравнивает tokens из `skill.name`/`skill.description` с title и последними user messages;
 - полный `SKILL.md` агент читает через `skill_read`, если prompt excerpt недостаточен.
 
-Если агент написал новый skill в своём workspace, runtime сам его не подхватывает. Нужно установить целую папку skill через `skill_install({ source_dir: "skills/<name>" })`; `source_dir` указывает на директорию с `SKILL.md`, а не на сам файл. После установки runtime копирует папку в `agent_home/skills/<name>/` и по умолчанию включает skill для текущей session.
+Если агент написал новый skill в текущей session workspace, runtime сам его не подхватывает как профильный skill. Нужно установить целую папку skill через `skill_install({ source_dir: "skills/<name>" })`; `source_dir` указывает на директорию с `SKILL.md`, а не на сам файл. После установки runtime копирует папку в `workspaces/agents/<agent_id>/skills/<name>/` и по умолчанию включает skill для текущей session.
 
 Минимальный набор:
 

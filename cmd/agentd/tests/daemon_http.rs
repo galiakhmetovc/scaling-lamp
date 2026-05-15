@@ -1096,14 +1096,6 @@ fn daemon_http_exposes_diagnostics_tail_route() {
 #[test]
 fn daemon_http_lists_and_updates_session_skills() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let skills_dir = temp.path().join("skills");
-    std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
-    std::fs::write(
-        skills_dir.join("rust-debug").join("SKILL.md"),
-        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
-    )
-    .expect("write skill");
-
     let mut config = AppConfig {
         data_dir: temp.path().join("teamd-state"),
         ..AppConfig::default()
@@ -1111,12 +1103,21 @@ fn daemon_http_lists_and_updates_session_skills() {
     config.daemon.bind_host = "127.0.0.1".to_string();
     config.daemon.bind_port = free_port();
     config.daemon.bearer_token = Some("secret-token".to_string());
-    config.daemon.skills_dir = skills_dir;
     let base_url = format!(
         "http://{}:{}",
         config.daemon.bind_host, config.daemon.bind_port
     );
     let app = bootstrap::build_from_config(config).expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
+    std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
+    std::fs::write(
+        skills_dir.join("rust-debug").join("SKILL.md"),
+        "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
+    )
+    .expect("write skill");
     let session = app
         .create_session_auto(Some("Daemon Skill Session"))
         .expect("create session");

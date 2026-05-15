@@ -86,7 +86,7 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["default", "judge"]
+        vec!["default"]
     );
 
     let current = app.current_agent_profile().expect("current agent");
@@ -101,47 +101,41 @@ fn build_from_config_bootstraps_builtin_agents_and_selects_default() {
     assert!(default_workspace.ends_with(Path::new("workspaces/agents/default")));
     assert!(!default_workspace.starts_with(&data_dir));
 
-    for agent_id in ["default", "judge"] {
-        let agent_home = data_dir.join("agents").join(agent_id);
-        assert!(agent_home.join("SYSTEM.md").is_file());
-        assert!(agent_home.join("AGENTS.md").is_file());
-        assert!(agent_home.join("skills").is_dir());
-        let profile = app.agent_profile(agent_id).expect("agent profile");
-        let workspace = profile
-            .default_workspace_root
-            .as_ref()
-            .expect("agent workspace");
-        assert!(workspace.is_dir());
-        assert!(workspace.ends_with(Path::new(&format!("workspaces/agents/{agent_id}"))));
-        assert!(!workspace.starts_with(&data_dir));
-    }
+    let profile = app.agent_profile("default").expect("agent profile");
+    assert_eq!(profile.agent_home.as_path(), default_workspace.as_path());
+    assert!(profile.agent_home.join("SYSTEM.md").is_file());
+    assert!(profile.agent_home.join("AGENTS.md").is_file());
+    assert!(profile.agent_home.join("skills").is_dir());
+    let workspace = profile
+        .default_workspace_root
+        .as_ref()
+        .expect("agent workspace");
+    assert!(workspace.is_dir());
+    assert!(workspace.ends_with(Path::new("workspaces/agents/default")));
+    assert!(!workspace.starts_with(&data_dir));
     let default_system =
-        fs::read_to_string(data_dir.join("agents/default/SYSTEM.md")).expect("read default system");
+        fs::read_to_string(default_workspace.join("SYSTEM.md")).expect("read default system");
     assert!(default_system.contains("Self-learning"));
     assert!(default_system.contains("Do not rely on hidden memory"));
     assert!(default_system.contains("Keep the workspace clean"));
-    let judge_system =
-        fs::read_to_string(data_dir.join("agents/judge/SYSTEM.md")).expect("read judge system");
-    assert!(judge_system.contains("Self-learning"));
-    assert!(judge_system.contains("Keep the workspace clean"));
     assert!(
-        data_dir
-            .join("agents/default/skills/silverbullet-space/SKILL.md")
+        default_workspace
+            .join("skills/silverbullet-space/SKILL.md")
             .is_file()
     );
     assert!(
-        data_dir
-            .join("agents/default/skills/mem0-memory/SKILL.md")
+        default_workspace
+            .join("skills/mem0-memory/SKILL.md")
             .is_file()
     );
     assert!(
-        !data_dir
-            .join("agents/default/skills/obsidian-vault/SKILL.md")
+        !default_workspace
+            .join("skills/obsidian-vault/SKILL.md")
             .exists()
     );
     assert!(
-        !data_dir
-            .join("agents/default/skills/logseq-graph/SKILL.md")
+        !default_workspace
+            .join("skills/logseq-graph/SKILL.md")
             .exists()
     );
 
@@ -163,10 +157,13 @@ fn create_session_binds_the_current_selected_agent_profile() {
     })
     .expect("build app");
 
+    let created = app
+        .create_agent_from_template("Worker", None)
+        .expect("create worker profile");
     let selected = app
-        .select_agent_profile("judge")
-        .expect("select judge profile");
-    assert_eq!(selected.id, "judge");
+        .select_agent_profile("worker")
+        .expect("select worker profile");
+    assert_eq!(selected.id, created.id);
 
     let session = app
         .create_session_auto(Some("Judge Session"))
@@ -177,16 +174,14 @@ fn create_session_binds_the_current_selected_agent_profile() {
         .expect("get session")
         .expect("session exists");
 
-    assert_eq!(stored.agent_profile_id, "judge");
+    assert_eq!(stored.agent_profile_id, "worker");
 }
 
 #[test]
 fn create_session_prefers_agent_default_workspace_over_global_default() {
     let temp = tempfile::tempdir().expect("tempdir");
     let global_workspace = temp.path().join("global-workspace");
-    let judge_workspace = temp.path().join("judge-workspace");
     fs::create_dir_all(&global_workspace).expect("create global workspace");
-    fs::create_dir_all(&judge_workspace).expect("create judge workspace");
 
     let mut config = AppConfig {
         data_dir: temp.path().join("state-root"),
@@ -196,25 +191,30 @@ fn create_session_prefers_agent_default_workspace_over_global_default() {
     let app = build_from_config(config).expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
-    let mut judge = app.agent_profile("judge").expect("judge profile");
-    judge.default_workspace_root = Some(judge_workspace.clone());
-    store
-        .put_agent_profile(&AgentProfileRecord::try_from(&judge).expect("judge record"))
-        .expect("update judge profile");
+    let worker = app
+        .create_agent_from_template("Worker", None)
+        .expect("create worker");
 
-    app.select_agent_profile("judge")
-        .expect("select judge profile");
+    app.select_agent_profile("worker")
+        .expect("select worker profile");
 
     let session = app
-        .create_session_auto(Some("Judge Workspace Session"))
+        .create_session_auto(Some("Worker Workspace Session"))
         .expect("create session");
     let stored = store
         .get_session(&session.id)
         .expect("get session")
         .expect("session exists");
 
-    assert_eq!(stored.agent_profile_id, "judge");
-    assert_eq!(stored.workspace_root, judge_workspace.display().to_string());
+    assert_eq!(stored.agent_profile_id, "worker");
+    assert_eq!(
+        stored.workspace_root,
+        worker.agent_home.display().to_string()
+    );
+    assert_ne!(
+        stored.workspace_root,
+        global_workspace.display().to_string()
+    );
 }
 
 #[test]
@@ -226,46 +226,46 @@ fn create_agent_from_template_copies_template_files_independently() {
     })
     .expect("build app");
 
-    let judge_home = app.agent_home_path("judge").expect("judge home");
-    let judge_agents_before =
-        fs::read_to_string(judge_home.join("AGENTS.md")).expect("read judge agents");
-    let judge_system_before =
-        fs::read_to_string(judge_home.join("SYSTEM.md")).expect("read judge system");
+    let default_workspace = app.agent_home_path("default").expect("default workspace");
+    let default_agents_before =
+        fs::read_to_string(default_workspace.join("AGENTS.md")).expect("read default agents");
+    let default_system_before =
+        fs::read_to_string(default_workspace.join("SYSTEM.md")).expect("read default system");
 
     let created = app
-        .create_agent_from_template("Judge Copy", Some("judge"))
-        .expect("create agent from judge");
+        .create_agent_from_template("Worker Copy", None)
+        .expect("create agent from default");
     assert_eq!(created.template_kind, AgentTemplateKind::Custom);
-    assert_ne!(created.agent_home, judge_home);
+    assert_ne!(created.agent_home, default_workspace);
     let created_workspace = created
         .default_workspace_root
         .as_ref()
         .expect("created agent workspace");
     assert!(created_workspace.is_dir());
-    assert!(created_workspace.ends_with(Path::new("workspaces/agents/judge-copy")));
+    assert!(created_workspace.ends_with(Path::new("workspaces/agents/worker-copy")));
     assert_ne!(
         created.default_workspace_root,
-        app.agent_profile("judge")
-            .expect("judge profile")
+        app.agent_profile("default")
+            .expect("default profile")
             .default_workspace_root
     );
 
     assert_eq!(
         fs::read_to_string(created.agent_home.join("SYSTEM.md")).expect("read copied system"),
-        judge_system_before
+        default_system_before
     );
     assert_eq!(
         fs::read_to_string(created.agent_home.join("AGENTS.md")).expect("read copied agents"),
-        judge_agents_before
+        default_agents_before
     );
 
     fs::write(created.agent_home.join("AGENTS.md"), "customized copy").expect("mutate copy");
     assert_eq!(
-        fs::read_to_string(judge_home.join("AGENTS.md")).expect("re-read judge agents"),
-        judge_agents_before
+        fs::read_to_string(default_workspace.join("AGENTS.md")).expect("re-read default agents"),
+        default_agents_before
     );
 
-    app.select_agent_profile("Judge Copy")
+    app.select_agent_profile("Worker Copy")
         .expect("select copied agent");
     let session = app
         .create_session_auto(Some("Copied Agent Workspace"))
@@ -509,7 +509,7 @@ fn agent_create_tool_rejects_unapproved_custom_template_agents() {
     })
     .expect("build app");
     let copied = app
-        .create_agent_from_template("Judge Copy", Some("judge"))
+        .create_agent_from_template("Seed Agent", None)
         .expect("create operator copy");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
     seed_running_tool_context(
@@ -549,5 +549,5 @@ fn agent_create_tool_rejects_unapproved_custom_template_agents() {
         })
         .expect_err("custom template should be rejected");
     let message = format!("{error}");
-    assert!(message.contains("built-in or the current session agent"));
+    assert!(message.contains("agent_create supports only the default template"));
 }

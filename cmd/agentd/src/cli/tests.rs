@@ -128,12 +128,8 @@ fn process_cli_accepts_agent_profile_commands() {
     assert!(super::ProcessInvocation::parse(["agent", "show", "judge"]).is_ok());
     assert!(super::ProcessInvocation::parse(["agent", "select", "judge"]).is_ok());
     assert!(super::ProcessInvocation::parse(["agent", "open", "judge"]).is_ok());
-    assert!(
-        super::ProcessInvocation::parse(["agent", "create", "Reviewer", "from", "judge"]).is_ok()
-    );
-    assert!(
-        super::ProcessInvocation::parse(["агент", "создать", "Ревьюер", "из", "judge"]).is_ok()
-    );
+    assert!(super::ProcessInvocation::parse(["agent", "create", "Reviewer"]).is_ok());
+    assert!(super::ProcessInvocation::parse(["агент", "создать", "Ревьюер"]).is_ok());
 }
 
 #[test]
@@ -147,10 +143,8 @@ fn execute_renders_agent_profile_commands() {
 
     let agents = super::execute(&app, ["agent", "list"]).expect("list agents");
     assert!(agents.contains("default"));
-    assert!(agents.contains("judge"));
 
-    let created =
-        super::execute(&app, ["agent", "create", "Reviewer", "from", "judge"]).expect("create");
+    let created = super::execute(&app, ["agent", "create", "Reviewer"]).expect("create");
     assert!(created.contains("Reviewer"));
     assert!(created.contains("reviewer"));
 

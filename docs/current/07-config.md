@@ -29,7 +29,7 @@
 - `bind_host`
 - `bind_port`
 - `bearer_token`
-- `skills_dir`
+- `skills_dir` (legacy/deprecated; runtime activation берёт skills из workspace агента)
 - `public_base_url`
 - `a2a_peers`
 - `mcp_connectors`
@@ -760,7 +760,7 @@ export TEAMD_OTLP_TIMEOUT_MS='2000'
 
 Если запускать бинарь то из-под пользователя, то из-под `root`, легко случайно получить два разных state root’а. Поэтому в production-like запуске стоит явно понимать, какой `data_dir` вы используете.
 
-`data_dir/agents/<agent_id>` сейчас является `agent_home` профиля агента: там prompts и skills, а не рабочий каталог проекта. План явного разделения `agent_home` и `workspace` описан в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
+Canonical место профиля агента сейчас `../workspaces/agents/<agent_id>/` относительно `data_dir`: там лежат `SYSTEM.md`, `AGENTS.md`, `skills/` и рабочая директория tools для новых session. Старый `data_dir/agents/<agent_id>` считается legacy layout и используется только для миграции missing файлов.
 
 Подробная карта файлов в `data_dir` описана в [06-storage-recovery-and-diagnostics.md](06-storage-recovery-and-diagnostics.md).
 

@@ -1248,7 +1248,7 @@ fn render_dialog(frame: &mut Frame<'_>, dialog: DialogState) {
             format!("Новая сессия\n\n{value}\n\nEnter подтвердить, Esc отмена")
         }
         DialogState::CreateAgent { value } => format!(
-            "Создать агента\n\n{value}\n\nФормат: <имя> [из <шаблона>]\nПример: ревьюер из judge\n\nEnter подтвердить, Esc отмена"
+            "Создать агента\n\n{value}\n\nФормат: <имя>\nПример: ревьюер\n\nEnter подтвердить, Esc отмена"
         ),
         DialogState::CreateScheduleForm { form } | DialogState::EditScheduleForm { form } => {
             form.render_lines().join("\n")

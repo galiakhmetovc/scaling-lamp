@@ -241,20 +241,17 @@ impl ExecutionService {
     ) -> Result<AgentCreateOutput, ExecutionError> {
         let session = load_session_or_internal(store, session_id)?;
         let template = resolve_tool_agent_template(store, &session, input)?;
-        let template_fallback = agents::builtin_template(&template.id).unwrap_or(
-            agents::builtin_template(agents::DEFAULT_AGENT_ID)
-                .expect("built-in default agent template must exist"),
-        );
+        let template_fallback = agents::builtin_template(agents::DEFAULT_AGENT_ID)
+            .expect("built-in default agent template must exist");
         let template_content =
             agents::load_builtin_template_content(&self.config.data_dir, template_fallback)
                 .map_err(io_agent_tool_error)?;
         let base_id = agents::normalize_agent_id(&input.name);
         let agent_id = next_available_agent_id(store, &base_id)?;
-        let agent_home = agents::agent_home(&self.config.data_dir, &agent_id);
         let agent_workspace = agents::agent_workspace(&self.config.data_dir, &agent_id);
-        agents::clone_agent_home(
+        agents::clone_agent_workspace(
             &template.agent_home,
-            &agent_home,
+            &agent_workspace,
             &template_content.system_md,
             &template_content.agents_md,
         )
@@ -272,9 +269,9 @@ impl ExecutionService {
             &agent_id,
             input.name.trim(),
             AgentTemplateKind::Custom,
-            &agent_home,
+            &agent_workspace,
             template.allowed_tools.clone(),
-            Some(agent_workspace),
+            Some(agent_workspace.clone()),
             Some(template.id.clone()),
             Some(session.id.clone()),
             Some(session.agent_profile_id.clone()),
@@ -603,21 +600,19 @@ fn resolve_agent_for_session(
 
 fn resolve_tool_agent_template(
     store: &PersistenceStore,
-    session: &Session,
+    _session: &Session,
     input: &AgentCreateInput,
 ) -> Result<AgentProfile, ExecutionError> {
     let identifier = input
         .template_identifier
         .as_deref()
-        .unwrap_or(session.agent_profile_id.as_str());
-    let template = resolve_agent_profile_by_identifier(store, identifier)?;
-    if template.template_kind == AgentTemplateKind::Custom
-        && template.id != session.agent_profile_id
-    {
+        .unwrap_or(agents::DEFAULT_AGENT_ID);
+    if identifier != agents::DEFAULT_AGENT_ID {
         return Err(invalid_agent_tool(
-            "agent_create templates must be built-in or the current session agent".to_string(),
+            "agent_create supports only the default template".to_string(),
         ));
     }
+    let template = resolve_agent_profile_by_identifier(store, identifier)?;
     Ok(template)
 }
 

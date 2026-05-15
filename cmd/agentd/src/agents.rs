@@ -5,12 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_AGENT_ID: &str = "default";
-pub const JUDGE_AGENT_ID: &str = "judge";
 
 const DEFAULT_SYSTEM_MD: &str = include_str!("../../../agent-templates/default/SYSTEM.md");
 const DEFAULT_AGENTS_MD: &str = include_str!("../../../agent-templates/default/AGENTS.md");
-const JUDGE_SYSTEM_MD: &str = include_str!("../../../agent-templates/judge/SYSTEM.md");
-const JUDGE_AGENTS_MD: &str = include_str!("../../../agent-templates/judge/AGENTS.md");
 const OPERATOR_USER_MD: &str = include_str!("../../../agent-templates/operator/USER.md");
 const MEMORY_CURATOR_SYSTEM_MD: &str =
     include_str!("../../../agent-templates/system/memory-curator/SYSTEM.md");
@@ -53,14 +50,6 @@ const BUNDLED_TEMPLATE_FILES: &[BundledTemplateFile] = &[
     BundledTemplateFile {
         relative_path: "default/AGENTS.md",
         content: DEFAULT_AGENTS_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "judge/SYSTEM.md",
-        content: JUDGE_SYSTEM_MD,
-    },
-    BundledTemplateFile {
-        relative_path: "judge/AGENTS.md",
-        content: JUDGE_AGENTS_MD,
     },
     BundledTemplateFile {
         relative_path: "operator/USER.md",
@@ -162,22 +151,13 @@ pub struct BuiltinAgentTemplateContent {
     pub agents_md: String,
 }
 
-const BUILTIN_TEMPLATES: [BuiltinAgentTemplate; 2] = [
-    BuiltinAgentTemplate {
-        id: DEFAULT_AGENT_ID,
-        name: "Ассистент",
-        template_kind: AgentTemplateKind::Default,
-        system_md: DEFAULT_SYSTEM_MD,
-        agents_md: DEFAULT_AGENTS_MD,
-    },
-    BuiltinAgentTemplate {
-        id: JUDGE_AGENT_ID,
-        name: "Judge",
-        template_kind: AgentTemplateKind::Judge,
-        system_md: JUDGE_SYSTEM_MD,
-        agents_md: JUDGE_AGENTS_MD,
-    },
-];
+const BUILTIN_TEMPLATES: [BuiltinAgentTemplate; 1] = [BuiltinAgentTemplate {
+    id: DEFAULT_AGENT_ID,
+    name: "Ассистент",
+    template_kind: AgentTemplateKind::Default,
+    system_md: DEFAULT_SYSTEM_MD,
+    agents_md: DEFAULT_AGENTS_MD,
+}];
 
 pub fn builtin_templates() -> &'static [BuiltinAgentTemplate] {
     &BUILTIN_TEMPLATES
@@ -261,8 +241,12 @@ pub fn agents_root(data_dir: &Path) -> PathBuf {
     data_dir.join("agents")
 }
 
-pub fn agent_home(data_dir: &Path, agent_id: &str) -> PathBuf {
+pub fn legacy_agent_home(data_dir: &Path, agent_id: &str) -> PathBuf {
     agents_root(data_dir).join(agent_id)
+}
+
+pub fn agent_home(data_dir: &Path, agent_id: &str) -> PathBuf {
+    agent_workspace(data_dir, agent_id)
 }
 
 pub fn agent_workspace(data_dir: &Path, agent_id: &str) -> PathBuf {
@@ -275,7 +259,7 @@ pub fn agent_workspace(data_dir: &Path, agent_id: &str) -> PathBuf {
 }
 
 pub fn ensure_agent_workspace_layout(agent_workspace: &Path) -> io::Result<()> {
-    fs::create_dir_all(agent_workspace)
+    fs::create_dir_all(agent_workspace.join("skills"))
 }
 
 pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
@@ -324,16 +308,25 @@ pub fn builtin_allowed_tools(template_kind: AgentTemplateKind) -> Vec<String> {
     }
 }
 
-pub fn ensure_builtin_agent_home_layout(
+pub fn ensure_builtin_agent_workspace_layout(
     data_dir: &Path,
-    agent_home: &Path,
+    agent_workspace: &Path,
     template: BuiltinAgentTemplate,
 ) -> io::Result<()> {
     ensure_runtime_agent_templates_layout(data_dir)?;
     let content = load_builtin_template_content(data_dir, template)?;
-    fs::create_dir_all(agent_home.join("skills"))?;
-    sync_builtin_prompt_file(&agent_home.join("SYSTEM.md"), &content.system_md)?;
-    sync_builtin_prompt_file(&agent_home.join("AGENTS.md"), &content.agents_md)?;
+    let legacy_home = legacy_agent_home(data_dir, template.id);
+    fs::create_dir_all(agent_workspace.join("skills"))?;
+    copy_legacy_or_sync_builtin_prompt_file(
+        &legacy_home.join("SYSTEM.md"),
+        &agent_workspace.join("SYSTEM.md"),
+        &content.system_md,
+    )?;
+    copy_legacy_or_sync_builtin_prompt_file(
+        &legacy_home.join("AGENTS.md"),
+        &agent_workspace.join("AGENTS.md"),
+        &content.agents_md,
+    )?;
     if template.id == DEFAULT_AGENT_ID {
         for skill in DEFAULT_ACTIVE_SKILL_TEMPLATES {
             let skill_content = read_runtime_template_or_bundled(
@@ -341,51 +334,100 @@ pub fn ensure_builtin_agent_home_layout(
                 skill.relative_path,
                 skill.bundled_content,
             )?;
-            sync_builtin_default_skill(agent_home, skill.name, &skill_content)?;
+            copy_legacy_or_sync_builtin_default_skill(
+                &legacy_home,
+                agent_workspace,
+                skill.name,
+                &skill_content,
+            )?;
         }
     }
     Ok(())
 }
 
-fn sync_builtin_default_skill(
-    agent_home: &Path,
-    skill_name: &str,
-    content: &str,
-) -> io::Result<()> {
-    let skill_dir = agent_home.join("skills").join(skill_name);
-    fs::create_dir_all(&skill_dir)?;
-    sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content)
-}
-
-pub fn clone_agent_home(
-    source_home: &Path,
-    destination_home: &Path,
+pub fn clone_agent_workspace(
+    source_workspace: &Path,
+    destination_workspace: &Path,
     fallback_system: &str,
     fallback_agents: &str,
 ) -> io::Result<()> {
-    if destination_home.exists() {
+    if destination_workspace.exists() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("agent home {} already exists", destination_home.display()),
+            format!(
+                "agent workspace {} already exists",
+                destination_workspace.display()
+            ),
         ));
     }
 
-    fs::create_dir_all(destination_home.join("skills"))?;
+    fs::create_dir_all(destination_workspace.join("skills"))?;
     copy_or_write(
-        &source_home.join("SYSTEM.md"),
-        &destination_home.join("SYSTEM.md"),
+        &source_workspace.join("SYSTEM.md"),
+        &destination_workspace.join("SYSTEM.md"),
         fallback_system,
     )?;
     copy_or_write(
-        &source_home.join("AGENTS.md"),
-        &destination_home.join("AGENTS.md"),
+        &source_workspace.join("AGENTS.md"),
+        &destination_workspace.join("AGENTS.md"),
         fallback_agents,
     )?;
     clone_directory_contents(
-        &source_home.join("skills"),
-        &destination_home.join("skills"),
+        &source_workspace.join("skills"),
+        &destination_workspace.join("skills"),
     )?;
     Ok(())
+}
+
+pub fn migrate_legacy_agent_home_to_workspace(
+    legacy_home: &Path,
+    agent_workspace: &Path,
+) -> io::Result<()> {
+    fs::create_dir_all(agent_workspace.join("skills"))?;
+    copy_if_missing(
+        &legacy_home.join("SYSTEM.md"),
+        &agent_workspace.join("SYSTEM.md"),
+    )?;
+    copy_if_missing(
+        &legacy_home.join("AGENTS.md"),
+        &agent_workspace.join("AGENTS.md"),
+    )?;
+    clone_directory_contents_if_missing(
+        &legacy_home.join("skills"),
+        &agent_workspace.join("skills"),
+    )?;
+    Ok(())
+}
+
+fn copy_legacy_or_sync_builtin_prompt_file(
+    legacy_path: &Path,
+    workspace_path: &Path,
+    current: &str,
+) -> io::Result<()> {
+    copy_if_missing(legacy_path, workspace_path)?;
+    sync_builtin_prompt_file(workspace_path, current)
+}
+
+fn copy_legacy_or_sync_builtin_default_skill(
+    legacy_home: &Path,
+    agent_workspace: &Path,
+    skill_name: &str,
+    content: &str,
+) -> io::Result<()> {
+    let legacy_skill_dir = legacy_home.join("skills").join(skill_name);
+    let workspace_skill_dir = agent_workspace.join("skills").join(skill_name);
+    clone_directory_contents_if_missing(&legacy_skill_dir, &workspace_skill_dir)?;
+    sync_builtin_default_skill(agent_workspace, skill_name, content)
+}
+
+fn sync_builtin_default_skill(
+    agent_workspace: &Path,
+    skill_name: &str,
+    content: &str,
+) -> io::Result<()> {
+    let skill_dir = agent_workspace.join("skills").join(skill_name);
+    fs::create_dir_all(&skill_dir)?;
+    sync_builtin_prompt_file(&skill_dir.join("SKILL.md"), content)
 }
 
 pub fn normalize_agent_id(name: &str) -> String {
@@ -460,6 +502,25 @@ fn copy_or_write(source: &Path, destination: &Path, fallback: &str) -> io::Resul
     Ok(())
 }
 
+fn copy_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
+    if destination.exists() || !source.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, destination)?;
+    Ok(())
+}
+
+fn clone_directory_contents_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
+    if destination.exists() || !source.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(destination)?;
+    clone_directory_contents(source, destination)
+}
+
 fn clone_directory_contents(source: &Path, destination: &Path) -> io::Result<()> {
     if !source.exists() {
         return Ok(());
@@ -511,7 +572,7 @@ mod tests {
         )
         .expect("write skill override");
 
-        ensure_builtin_agent_home_layout(
+        ensure_builtin_agent_workspace_layout(
             &data_dir,
             &default_home,
             builtin_template(DEFAULT_AGENT_ID).expect("default template"),
@@ -549,7 +610,7 @@ mod tests {
         fs::write(default_home.join("AGENTS.md"), "operator custom agents\n")
             .expect("write custom agents");
 
-        ensure_builtin_agent_home_layout(
+        ensure_builtin_agent_workspace_layout(
             &data_dir,
             &default_home,
             builtin_template(DEFAULT_AGENT_ID).expect("default template"),
@@ -568,7 +629,7 @@ mod tests {
         let data_dir = temp.path().join("state");
         let default_home = agent_home(&data_dir, DEFAULT_AGENT_ID);
 
-        ensure_builtin_agent_home_layout(
+        ensure_builtin_agent_workspace_layout(
             &data_dir,
             &default_home,
             builtin_template(DEFAULT_AGENT_ID).expect("default template"),

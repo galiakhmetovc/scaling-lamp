@@ -8,6 +8,7 @@ use agent_runtime::agent::{
     AgentTemplateKind,
 };
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,13 +93,16 @@ impl App {
         let now = unix_timestamp()?;
 
         for template in agents::builtin_templates() {
-            let home = agents::agent_home(&self.config.data_dir, template.id);
             let workspace = agents::agent_workspace(&self.config.data_dir, template.id);
-            agents::ensure_builtin_agent_home_layout(&self.config.data_dir, &home, *template)
-                .map_err(|source| BootstrapError::Io {
-                    path: home.clone(),
-                    source,
-                })?;
+            agents::ensure_builtin_agent_workspace_layout(
+                &self.config.data_dir,
+                &workspace,
+                *template,
+            )
+            .map_err(|source| BootstrapError::Io {
+                path: workspace.clone(),
+                source,
+            })?;
             agents::ensure_agent_workspace_layout(&workspace).map_err(|source| {
                 BootstrapError::Io {
                     path: workspace.clone(),
@@ -120,9 +124,9 @@ impl App {
                 template.id,
                 template.name,
                 template.template_kind,
-                &home,
+                &workspace,
                 agents::builtin_allowed_tools(template.template_kind),
-                Some(workspace),
+                Some(workspace.clone()),
                 created_at,
                 now,
             )
@@ -135,6 +139,8 @@ impl App {
             )?;
         }
 
+        self.migrate_agent_profiles_to_workspace_roots(&store, now)?;
+
         let current = store.get_current_agent_profile_id()?;
         let current_valid = match current {
             Some(ref id) => store.get_agent_profile(id)?.is_some(),
@@ -142,6 +148,79 @@ impl App {
         };
         if !current_valid {
             store.set_current_agent_profile_id(Some(agents::DEFAULT_AGENT_ID))?;
+        }
+
+        Ok(())
+    }
+
+    fn migrate_agent_profiles_to_workspace_roots(
+        &self,
+        store: &agent_persistence::PersistenceStore,
+        now: i64,
+    ) -> Result<(), BootstrapError> {
+        let profiles = store
+            .list_agent_profiles()?
+            .into_iter()
+            .map(AgentProfile::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(BootstrapError::RecordConversion)?;
+
+        for profile in profiles {
+            let workspace = agents::agent_workspace(&self.config.data_dir, &profile.id);
+            agents::migrate_legacy_agent_home_to_workspace(&profile.agent_home, &workspace)
+                .map_err(|source| BootstrapError::Io {
+                    path: workspace.clone(),
+                    source,
+                })?;
+            ensure_workspace_prompt_file(
+                &workspace.join("SYSTEM.md"),
+                agents::fallback_system_md(&self.config.data_dir, &profile.id),
+            )
+            .map_err(|source| BootstrapError::Io {
+                path: workspace.join("SYSTEM.md"),
+                source,
+            })?;
+            ensure_workspace_prompt_file(
+                &workspace.join("AGENTS.md"),
+                agents::fallback_agents_md(&self.config.data_dir, &profile.id),
+            )
+            .map_err(|source| BootstrapError::Io {
+                path: workspace.join("AGENTS.md"),
+                source,
+            })?;
+
+            if profile.agent_home == workspace
+                && profile.default_workspace_root.as_ref() == Some(&workspace)
+            {
+                continue;
+            }
+
+            agent_persistence::validate_workspace_root_path(
+                "agent.default_workspace_root",
+                &workspace,
+                &self.config.data_dir,
+            )
+            .map_err(BootstrapError::Config)?;
+            let updated = AgentProfile::new_with_provenance(
+                profile.id,
+                profile.name,
+                profile.template_kind,
+                &workspace,
+                profile.allowed_tools,
+                Some(workspace.clone()),
+                profile.created_from_template_id,
+                profile.created_by_session_id,
+                profile.created_by_agent_profile_id,
+                profile.created_at,
+                now,
+            )
+            .map_err(|error| BootstrapError::Usage {
+                reason: error.to_string(),
+            })?;
+            store.put_agent_profile(
+                &AgentProfileRecord::try_from(&updated)
+                    .map_err(BootstrapError::RecordConversion)?,
+            )?;
         }
 
         Ok(())
@@ -198,20 +277,23 @@ impl App {
         template_identifier: Option<&str>,
     ) -> Result<AgentProfile, BootstrapError> {
         let store = self.store()?;
-        let template = load_agent_profile(
-            &store,
-            template_identifier.unwrap_or(agents::DEFAULT_AGENT_ID),
-        )?
-        .ok_or_else(|| BootstrapError::MissingRecord {
-            kind: "agent",
-            id: template_identifier
-                .unwrap_or(agents::DEFAULT_AGENT_ID)
-                .to_string(),
+        let requested_template = template_identifier
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(agents::DEFAULT_AGENT_ID);
+        if requested_template != agents::DEFAULT_AGENT_ID {
+            return Err(BootstrapError::Usage {
+                reason: "only the default agent template is supported".to_string(),
+            });
+        }
+        let template = load_agent_profile(&store, agents::DEFAULT_AGENT_ID)?.ok_or_else(|| {
+            BootstrapError::MissingRecord {
+                kind: "agent",
+                id: agents::DEFAULT_AGENT_ID.to_string(),
+            }
         })?;
-        let template_fallback = agents::builtin_template(&template.id).unwrap_or(
-            agents::builtin_template(agents::DEFAULT_AGENT_ID)
-                .expect("built-in default agent template must exist"),
-        );
+        let template_fallback = agents::builtin_template(agents::DEFAULT_AGENT_ID)
+            .expect("built-in default agent template must exist");
         let template_content =
             agents::load_builtin_template_content(&self.config.data_dir, template_fallback)
                 .map_err(|source| BootstrapError::Io {
@@ -221,16 +303,15 @@ impl App {
 
         let base_id = agents::normalize_agent_id(name);
         let agent_id = next_available_agent_id(&store, &base_id)?;
-        let agent_home = agents::agent_home(&self.config.data_dir, &agent_id);
         let agent_workspace = agents::agent_workspace(&self.config.data_dir, &agent_id);
-        agents::clone_agent_home(
+        agents::clone_agent_workspace(
             &template.agent_home,
-            &agent_home,
+            &agent_workspace,
             &template_content.system_md,
             &template_content.agents_md,
         )
         .map_err(|source| BootstrapError::Io {
-            path: agent_home.clone(),
+            path: agent_workspace.clone(),
             source,
         })?;
         agents::ensure_agent_workspace_layout(&agent_workspace).map_err(|source| {
@@ -251,9 +332,9 @@ impl App {
             &agent_id,
             name.trim(),
             AgentTemplateKind::Custom,
-            &agent_home,
+            &agent_workspace,
             template.allowed_tools.clone(),
-            Some(agent_workspace),
+            Some(agent_workspace.clone()),
             Some(template.id.clone()),
             None,
             None,
@@ -595,7 +676,7 @@ impl App {
                 "-"
             };
             lines.push(format!(
-                "{marker} {} ({}) template={} tools={} home={}",
+                "{marker} {} ({}) template={} tools={} workspace={}",
                 agent.name,
                 agent.id,
                 agent.template_kind.as_str(),
@@ -620,7 +701,7 @@ impl App {
             None => self.current_agent_profile()?,
         };
         Ok(format!(
-            "agent_home={}\nSYSTEM.md={}\nAGENTS.md={}\nskills_dir={}\ndefault_workspace_root={}",
+            "agent_workspace={}\nSYSTEM.md={}\nAGENTS.md={}\nskills_dir={}\ndefault_workspace_root={}",
             profile.agent_home.display(),
             profile.agent_home.join("SYSTEM.md").display(),
             profile.agent_home.join("AGENTS.md").display(),
@@ -734,7 +815,7 @@ fn render_agent_profile(profile: &AgentProfile) -> String {
         format!("id={}", profile.id),
         format!("name={}", profile.name),
         format!("template={}", profile.template_kind.as_str()),
-        format!("home={}", profile.agent_home.display()),
+        format!("agent_workspace={}", profile.agent_home.display()),
         format!(
             "default_workspace_root={}",
             profile
@@ -778,6 +859,16 @@ fn render_agent_profile(profile: &AgentProfile) -> String {
         lines.extend(profile.allowed_tools.iter().map(|tool| format!("- {tool}")));
     }
     lines.join("\n")
+}
+
+fn ensure_workspace_prompt_file(path: &std::path::Path, fallback: String) -> std::io::Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, fallback)
 }
 
 fn load_agent_profile(

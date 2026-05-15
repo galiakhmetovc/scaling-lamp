@@ -387,7 +387,6 @@ data_dir = "/var/lib/teamd/state"
 [daemon]
 bind_host = "127.0.0.1"
 bind_port = 5140
-skills_dir = "skills"
 
 [telegram]
 enabled = true

@@ -1,14 +1,16 @@
 # План модернизации workspace-модели
 
-Этот документ начинался как целевой план. Часть шагов уже реализована:
+Этот документ начинался как целевой план. Итоговое решение уже принято и частично реализовано:
 
-- у `agent_profiles` есть persisted `default_workspace_root`;
-- у `sessions` есть persisted `workspace_root`;
-- session create path выбирает effective workspace по profile/config/runtime fallback;
-- prompt assembly и `ToolRuntime` берут workspace из persisted session context;
-- `workspace.default_root` вынесен в operator-facing config.
+- встроенный `Agent template` только один: `default`;
+- отдельного глобального skills storage для runtime activation нет;
+- отдельного `agent_home` как смысловой сущности нет;
+- каждый `Agent profile` имеет canonical workspace `workspaces/agents/<agent_id>/`;
+- в этом workspace лежат `SYSTEM.md`, `AGENTS.md`, `skills/` и рабочая область tools для новых sessions;
+- поле `agent_profiles.agent_home` оставлено как compatibility field и должно указывать на тот же workspace;
+- legacy `data_dir/agents/<agent_id>/` при bootstrap копируется в workspace, если там ещё нет соответствующих файлов.
 
-Ниже остаются исходная постановка проблемы, целевая модель и хвосты, которые ещё полезно добить.
+Ниже остаются исходная постановка проблемы и исторический план. Если старый текст противоречит списку выше, актуальным считается список выше.
 
 ## Проблема
 

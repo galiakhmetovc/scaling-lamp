@@ -12,7 +12,7 @@ use agent_runtime::run::{RunSnapshot, RunStatus, RunStepKind};
 use agent_runtime::session::{
     MessageRole, Session, TranscriptEntry, parse_scheduled_input_metadata,
 };
-use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog_with_overrides};
+use agent_runtime::skills::{resolve_session_skill_status, scan_skill_catalog};
 use agent_runtime::tool::ProcessOutputStream;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -1093,11 +1093,7 @@ impl App {
     ) -> Result<agent_runtime::skills::SkillCatalog, BootstrapError> {
         let agent_skills_dir =
             agents::agent_home(&self.config.data_dir, agent_profile_id).join("skills");
-        scan_skill_catalog_with_overrides(
-            &self.config.daemon.skills_dir,
-            Some(agent_skills_dir.as_path()),
-        )
-        .map_err(|source| BootstrapError::Io {
+        scan_skill_catalog(agent_skills_dir.as_path()).map_err(|source| BootstrapError::Io {
             path: agent_skills_dir,
             source,
         })

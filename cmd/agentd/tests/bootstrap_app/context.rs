@@ -4215,11 +4215,30 @@ fn provider_request_preview_filters_tools_by_agent_allowlist() {
         ..AppConfig::default()
     })
     .expect("build app");
+    let limited_agent = app
+        .create_agent_from_template("Limited Preview", None)
+        .expect("create limited agent");
+    app.update_agent_profile(
+        limited_agent.id.as_str(),
+        agentd::bootstrap::AgentProfileUpdatePatch {
+            name: None,
+            allowed_tools: Some(vec![
+                "fs_read_text".to_string(),
+                "plan_snapshot".to_string(),
+            ]),
+            default_workspace_root: None,
+        },
+    )
+    .expect("limit agent tools");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
     for (session_id, title, agent_profile_id) in [
         ("session-preview-default", "Default Preview", "default"),
-        ("session-preview-judge", "Judge Preview", "judge"),
+        (
+            "session-preview-limited",
+            "Limited Preview",
+            limited_agent.id.as_str(),
+        ),
     ] {
         store
             .put_session(&SessionRecord {
@@ -4243,18 +4262,18 @@ fn provider_request_preview_filters_tools_by_agent_allowlist() {
     let default_preview = app
         .render_provider_request_preview("session-preview-default")
         .expect("default provider preview");
-    let judge_preview = app
-        .render_provider_request_preview("session-preview-judge")
-        .expect("judge provider preview");
+    let limited_preview = app
+        .render_provider_request_preview("session-preview-limited")
+        .expect("limited provider preview");
 
     assert!(default_preview.contains("\"name\": \"exec_start\""));
     assert!(default_preview.contains("\"name\": \"fs_write_text\""));
     assert!(default_preview.contains("\"name\": \"plan_snapshot\""));
 
-    assert!(judge_preview.contains("\"name\": \"fs_read_text\""));
-    assert!(judge_preview.contains("\"name\": \"plan_snapshot\""));
-    assert!(!judge_preview.contains("\"name\": \"exec_start\""));
-    assert!(!judge_preview.contains("\"name\": \"fs_write_text\""));
+    assert!(limited_preview.contains("\"name\": \"fs_read_text\""));
+    assert!(limited_preview.contains("\"name\": \"plan_snapshot\""));
+    assert!(!limited_preview.contains("\"name\": \"exec_start\""));
+    assert!(!limited_preview.contains("\"name\": \"fs_write_text\""));
 }
 
 #[test]
@@ -4311,11 +4330,27 @@ fn provider_request_preview_merges_dynamic_mcp_tools_for_default_agents_only() {
         resource_reads: std::collections::BTreeMap::new(),
         prompt_gets: std::collections::BTreeMap::new(),
     }]);
+    let limited_agent = app
+        .create_agent_from_template("Limited Preview", None)
+        .expect("create limited agent");
+    app.update_agent_profile(
+        limited_agent.id.as_str(),
+        agentd::bootstrap::AgentProfileUpdatePatch {
+            name: None,
+            allowed_tools: Some(Vec::new()),
+            default_workspace_root: None,
+        },
+    )
+    .expect("remove limited agent tools");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
     for (session_id, title, agent_profile_id) in [
         ("session-preview-mcp-default", "Default Preview", "default"),
-        ("session-preview-mcp-judge", "Judge Preview", "judge"),
+        (
+            "session-preview-mcp-limited",
+            "Limited Preview",
+            limited_agent.id.as_str(),
+        ),
     ] {
         store
             .put_session(&SessionRecord {
@@ -4340,8 +4375,8 @@ fn provider_request_preview_merges_dynamic_mcp_tools_for_default_agents_only() {
         .render_provider_request_preview("session-preview-mcp-default")
         .expect("default provider preview");
     let judge_preview = app
-        .render_provider_request_preview("session-preview-mcp-judge")
-        .expect("judge provider preview");
+        .render_provider_request_preview("session-preview-mcp-limited")
+        .expect("limited provider preview");
 
     assert!(default_preview.contains("\"name\": \"mcp__docs__search_code\""));
     assert!(default_preview.contains("\"name\": \"mcp_search_resources\""));

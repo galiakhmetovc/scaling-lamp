@@ -15,7 +15,7 @@ use agent_runtime::provider::ProviderMessage;
 use agent_runtime::run::{PendingProviderApproval, RunSnapshot};
 use agent_runtime::session::{MessageRole, Session};
 use agent_runtime::skills::{
-    parse_skill_document, resolve_session_skill_status, scan_skill_catalog_with_overrides,
+    parse_skill_document, resolve_session_skill_status, scan_skill_catalog,
 };
 use agent_runtime::tool::{
     KnowledgeReadInput, KnowledgeReadOutput, KnowledgeSearchInput, KnowledgeSearchOutput,
@@ -676,13 +676,11 @@ impl App {
             prompting::load_agents_prompt(&self.config.data_dir, &session.agent_profile_id);
         let agent_skills_dir =
             agents::agent_home(&self.config.data_dir, &session.agent_profile_id).join("skills");
-        let skills_catalog = scan_skill_catalog_with_overrides(
-            &self.config.daemon.skills_dir,
-            Some(agent_skills_dir.as_path()),
-        )
-        .map_err(|source| BootstrapError::Io {
-            path: agent_skills_dir.clone(),
-            source,
+        let skills_catalog = scan_skill_catalog(agent_skills_dir.as_path()).map_err(|source| {
+            BootstrapError::Io {
+                path: agent_skills_dir.clone(),
+                source,
+            }
         })?;
         let active_skill_status = resolve_session_skill_status(
             &skills_catalog,
@@ -699,7 +697,7 @@ impl App {
         let mut lines = vec![
             "Системные блоки:".to_string(),
             format!(
-                "Агент: {} ({}) | home={}",
+                "Агент: {} ({}) | workspace={}",
                 agent_profile.name,
                 agent_profile.id,
                 agent_profile.agent_home.display()

@@ -119,13 +119,15 @@ Artifacts также используются для файлов: Telegram uplo
 `Agent profile` — это персонализация агента:
 
 - имя;
-- шаблон (`default`, `judge`);
-- `SYSTEM.md` и `AGENTS.md` в `agent_home`;
+- источник создания: единственный встроенный template `default`;
+- `SYSTEM.md` и `AGENTS.md` в workspace агента;
 - allowlist capabilities;
-- `default_workspace_root`;
+- `default_workspace_root`, который по умолчанию равен workspace агента;
 - operator-visible metadata.
 
-`Agent templates` материализуются в `data_dir/agent-templates/<template_id>/`. Это runtime-editable источник bootstrap prompts и template skills: его можно править без пересборки бинаря. Конкретный `agent_home` живёт в `data_dir/agents/<agent_id>/` и содержит собственные `SYSTEM.md`, `AGENTS.md` и `skills/`. Это editable profile home, а не project workspace. Для каждого agent profile также создаётся отдельный default workspace: рядом с `data_dir`, в `workspaces/agents/<agent_id>/`. Новые session берут persisted `workspace_root` из выбранного profile default workspace, если он задан. Детали разделения `agent templates`, `agent profiles` и рабочих директорий описаны в [11-workspace-modernization-plan.md](11-workspace-modernization-plan.md).
+У каждого agent profile есть один canonical workspace: рядом с `data_dir`, в `workspaces/agents/<agent_id>/`. В нём лежат `SYSTEM.md`, `AGENTS.md`, `skills/`, scratch/artifacts проекта агента и рабочая директория tools для новых session. Отдельного глобального хранилища skills и отдельного `agent_home` больше нет; поле `agent_home` в storage/API остаётся только совместимостью и указывает на тот же workspace.
+
+`Agent templates` материализуются в `data_dir/agent-templates/default/`. Это runtime-editable источник bootstrap prompts и shipped default skills: его можно править без пересборки бинаря. При создании нового agent profile runtime копирует default template в новый workspace агента. Старый layout `data_dir/agents/<agent_id>/` считается legacy и при bootstrap копируется в workspace, если там ещё нет соответствующих файлов.
 
 ## Как один запрос проходит через систему
 

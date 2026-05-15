@@ -1,10 +1,9 @@
 pub(crate) use agent_persistence::{
-    AgentProfileRecord, AgentRepository, AgentScheduleRecord, AppConfig, ArtifactRecord,
-    ArtifactRepository, ConfigError, ContextOffloadRepository, ContextSummaryRepository,
-    FileDeliveryRepository, JobRecord, JobRepository, MissionRecord, MissionRepository,
-    PersistenceStore, PlanRecord, PlanRepository, RunRecord, RunRepository, SessionInboxRepository,
-    SessionRecord, SessionRepository, StoreError, ToolCallRepository, TranscriptRepository,
-    WorkspaceConfig,
+    AgentRepository, AgentScheduleRecord, AppConfig, ArtifactRecord, ArtifactRepository,
+    ConfigError, ContextOffloadRepository, ContextSummaryRepository, FileDeliveryRepository,
+    JobRecord, JobRepository, MissionRecord, MissionRepository, PersistenceStore, PlanRecord,
+    PlanRepository, RunRecord, RunRepository, SessionInboxRepository, SessionRecord,
+    SessionRepository, StoreError, ToolCallRepository, TranscriptRepository, WorkspaceConfig,
 };
 pub(crate) use agent_runtime::context::{
     ContextOffloadPayload, ContextOffloadRef, ContextOffloadSnapshot,

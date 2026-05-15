@@ -2682,7 +2682,7 @@ mod tests {
                     "-"
                 };
                 lines.push(format!(
-                    "{marker} {name} ({id}) template=default tools=4 home=/tmp/{id}"
+                    "{marker} {name} ({id}) template=default tools=4 workspace=/tmp/{id}"
                 ));
             }
             Ok(lines.join("\n"))
@@ -4441,7 +4441,7 @@ mod tests {
             state.dialog_state(),
             Some(DialogState::CreateAgent { .. })
         ));
-        state.set_dialog_input("Ревьюер из judge".to_string());
+        state.set_dialog_input("Ревьюер".to_string());
         dispatch_action(&backend, &mut state, TuiAction::ConfirmDialog, &mut redraw)
             .expect("confirm create agent");
         assert!(

@@ -294,15 +294,14 @@ flowchart TD
 Runtime читает:
 
 ```text
-data_dir/agents/<agent_id>/SYSTEM.md
+workspaces/agents/<agent_id>/SYSTEM.md
 ```
 
 Если файл отсутствует или пустой, берётся fallback из `cmd/agentd/src/agents.rs`.
 
-Сейчас fallback зависит от `agent_id`:
+Сейчас fallback практически должен быть emergency-path:
 
 - для `default` берётся default built-in system prompt;
-- для `judge` берётся judge built-in system prompt;
 - для неизвестного id берётся default built-in system prompt.
 
 ### Что в этом неочевидно
@@ -320,8 +319,8 @@ data_dir/agents/<agent_id>/SYSTEM.md
 
 Рекомендуемая модель:
 
-- built-in templates при создании/обновлении agent home материализуют файлы `SYSTEM.md` и `AGENTS.md`;
-- prompt loader читает файлы из `agent_home`;
+- единственный built-in template `default` при создании/обновлении agent workspace материализует файлы `SYSTEM.md` и `AGENTS.md`;
+- prompt loader читает файлы из agent workspace;
 - если файл отсутствует или пустой, используется один общий минимальный fallback, одинаковый для всех agent profiles;
 - отсутствие profile file считается диагностическим событием, а не нормальной заменой на скрытый per-agent prompt.
 
@@ -347,7 +346,7 @@ Decision D1: `SYSTEM.md` должен быть:
 Runtime читает:
 
 ```text
-data_dir/agents/<agent_id>/AGENTS.md
+workspaces/agents/<agent_id>/AGENTS.md
 ```
 
 Если файл отсутствует или пустой, берётся fallback из `cmd/agentd/src/agents.rs`.
@@ -374,7 +373,7 @@ data_dir/agents/<agent_id>/AGENTS.md
 
 Рекомендуемая модель такая же, как для `SYSTEM.md`:
 
-- built-in template создаёт visible `AGENTS.md` в `agent_home`;
+- built-in template создаёт visible `AGENTS.md` в agent workspace;
 - runtime читает файл;
 - если файла нет, использует общий минимальный fallback;
 - per-agent fallback из Rust-кода убирается или остаётся только как migration seeding.
@@ -423,8 +422,7 @@ Workspace hygiene означает:
 
 Runtime сканирует:
 
-- общий `skills_dir`;
-- `data_dir/agents/<agent_id>/skills`.
+- `workspaces/agents/<agent_id>/skills`.
 
 Потом `resolve_session_skill_status` определяет активные skills:
 

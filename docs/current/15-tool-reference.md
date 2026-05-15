@@ -934,7 +934,7 @@ skill_install({
 
 Что делает:
 
-- устанавливает complete skill directory из workspace текущей session в `agent_home/skills/<name>/`;
+- устанавливает complete skill directory из workspace текущей session в `workspaces/agents/<agent_id>/skills/<name>/`;
 - `source_dir` должен быть относительным путём к папке, а не к файлу `SKILL.md`;
 - папка обязана содержать валидный `SKILL.md` с frontmatter `name` и `description`;
 - копирует всю директорию, включая `references/`, `assets/` и другие обычные файлы;
@@ -1601,9 +1601,9 @@ agent_create({
 
 Что делает:
 
-- создаёт новый agent profile из встроенного или существующего template.
-- копирует `SYSTEM.md`, `AGENTS.md` и template skills в отдельный `agent_home`;
-- создаёт отдельный default workspace для нового профиля: `workspaces/agents/<agent_id>`.
+- создаёт новый agent profile из единственного встроенного template `default`.
+- копирует `SYSTEM.md`, `AGENTS.md` и skills в отдельный workspace нового профиля: `workspaces/agents/<agent_id>`.
+- этот же workspace становится default workspace для новых session профиля.
 
 Важно:
 

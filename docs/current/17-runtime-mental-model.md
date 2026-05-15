@@ -204,14 +204,15 @@ Production layout сейчас такой:
 └── teamd.env
 
 /var/lib/teamd/state/
-├── agents/<agent_id>/              # agent_home: SYSTEM.md, AGENTS.md, skills/
+├── agent-templates/default/        # runtime-editable default template
+├── agents/<agent_id>/              # legacy layout, copied to workspace on bootstrap
 ├── artifacts/                      # payload files
 ├── audit/runtime.jsonl             # daemon/runtime audit events
 ├── runs/                           # run payloads
 └── transcripts/                    # transcript payload files
 
 /var/lib/teamd/workspaces/
-└── agents/<agent_id>/              # default workspaces
+└── agents/<agent_id>/              # agent workspace: SYSTEM.md, AGENTS.md, skills/, tools cwd
 
 /var/lib/teamd/knowledge/silverbullet/teamd/
 └── ...                             # operator/agent knowledge notes
@@ -220,31 +221,32 @@ Production layout сейчас такой:
 Разделение принципиальное:
 
 - `/var/lib/teamd/state` — runtime state, не workspace;
-- `/var/lib/teamd/state/agents/<agent_id>` — `agent_home`, prompts и skills, не workspace;
-- `/var/lib/teamd/workspaces/...` — рабочие директории tools;
+- `/var/lib/teamd/state/agent-templates/default` — единственный встроенный template;
+- `/var/lib/teamd/state/agents/<agent_id>` — legacy layout старых версий, не primary source;
+- `/var/lib/teamd/workspaces/agents/<agent_id>` — canonical workspace агента, его prompts, skills и рабочая директория tools;
 - `/var/lib/teamd/knowledge/silverbullet/teamd` — knowledge space, не transcript store;
 - `/etc/teamd` — config и env, не runtime data.
 
-## Agent home, workspace и knowledge
+## Agent workspace и knowledge
 
-### Agent home
+### Agent workspace
 
-`agent_home` содержит поведение профиля:
+Agent workspace содержит поведение и рабочую область профиля:
 
 - `SYSTEM.md`;
 - `AGENTS.md`;
 - `skills/`.
 
-Это editable home конкретного `Agent profile`. При создании нового профиля prompts и skills копируются из template в profile home. Изменение template не должно молча менять уже существующий profile.
+Это editable пространство конкретного `Agent profile`. При создании нового профиля prompts и skills копируются из default template в workspace профиля. Изменение template не должно молча менять уже существующий custom profile.
 
 ### Workspace
 
-`Workspace` — место, где tools читают/пишут project files и запускают команды. Workspace выбирается для session и сохраняется в session record.
+`Workspace` — место, где tools читают/пишут project files и запускают команды. По умолчанию для новых session это workspace выбранного agent profile. Конкретный путь сохраняется в session record.
 
 Правила:
 
 - tools используют session workspace;
-- workspace не должен быть `data_dir`, `state`, `agent_home`, `audit`, `transcripts` или `artifacts`;
+- workspace не должен быть `data_dir`, `state`, `audit`, `transcripts` или `artifacts`;
 - временные файлы не должны засорять корень workspace;
 - долговременные результаты нужно класть в явные каталоги: `docs/`, `artifacts/`, `diagnostics/`, project-specific path или SilverBullet Space.
 
@@ -363,7 +365,7 @@ Host `agentd` остаётся владельцем:
 | Какие tools вызваны | Tool-call ledger |
 | Что вернул большой tool output | Artifact payload |
 | Какой workspace у session | Session record |
-| Какие prompts/skills у профиля | Agent profile `agent_home` |
+| Какие prompts/skills у профиля | Agent workspace |
 | Как настроен daemon | `/etc/teamd/config.toml` и `teamd.env` |
 | Что видел operator через Telegram | Transcript + Telegram delivery/status records |
 | Какие знания ведёт агент | SilverBullet Space или explicit docs/artifacts |

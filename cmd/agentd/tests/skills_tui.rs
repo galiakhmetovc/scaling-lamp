@@ -17,7 +17,15 @@ fn write_skill(dir: &std::path::Path, name: &str, description: &str) {
 #[test]
 fn skills_tui_russian_commands_list_enable_and_disable_session_skills() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let skills_dir = temp.path().join("skills");
+    let app = build_from_config(AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
     std::fs::create_dir_all(&skills_dir).expect("skills dir");
     write_skill(
         &skills_dir,
@@ -29,16 +37,6 @@ fn skills_tui_russian_commands_list_enable_and_disable_session_skills() {
         "postgres",
         "Investigate PostgreSQL queries and migration issues.",
     );
-
-    let app = build_from_config(AppConfig {
-        data_dir: temp.path().join("state-root"),
-        daemon: agent_persistence::DaemonConfig {
-            skills_dir: skills_dir.clone(),
-            ..Default::default()
-        },
-        ..AppConfig::default()
-    })
-    .expect("build app");
     let session = app
         .create_session_auto(Some("Skill Session"))
         .expect("create session");

@@ -613,7 +613,7 @@ impl ToolCatalog {
             ToolDefinition {
                 name: ToolName::SkillInstall,
                 family: ToolFamily::Memory,
-                description: "Install a complete skill directory from the current workspace into the current agent profile. source_dir must be a relative workspace directory containing SKILL.md. The runtime validates SKILL.md frontmatter, copies the whole directory to agent_home/skills/<name>, and enables it for the current session by default.",
+                description: "Install a complete skill directory from the current session workspace into the current agent workspace. source_dir must be a relative workspace directory containing SKILL.md. The runtime validates SKILL.md frontmatter, copies the whole directory to the agent workspace at skills/<name>, and enables it for the current session by default.",
                 policy: ToolPolicy {
                     read_only: false,
                     destructive: false,

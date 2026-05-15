@@ -620,7 +620,15 @@ fn repl_runs_plan_command_and_renders_current_plan() {
 #[test]
 fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let skills_dir = temp.path().join("skills");
+    let config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    let app = build_from_config(config).expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
     std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
     std::fs::create_dir_all(skills_dir.join("postgres")).expect("postgres skill dir");
     std::fs::write(
@@ -633,13 +641,6 @@ fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
         "---\nname: postgres\ndescription: Investigate PostgreSQL queries and migration issues.\n---\n\n# postgres\n",
     )
     .expect("write postgres skill");
-
-    let mut config = AppConfig {
-        data_dir: temp.path().join("state-root"),
-        ..AppConfig::default()
-    };
-    config.daemon.skills_dir = skills_dir;
-    let app = build_from_config(config).expect("build app");
     let store = PersistenceStore::open(&app.persistence).expect("open store");
 
     store
@@ -683,20 +684,21 @@ fn repl_supports_russian_skill_commands_with_session_scoped_overrides() {
 #[test]
 fn cli_session_skill_commands_render_and_mutate_session_skill_overrides() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let skills_dir = temp.path().join("skills");
+    let config = AppConfig {
+        data_dir: temp.path().join("state-root"),
+        ..AppConfig::default()
+    };
+    let app = build_from_config(config).expect("build app");
+    let skills_dir = app
+        .agent_home_path("default")
+        .expect("default agent workspace")
+        .join("skills");
     std::fs::create_dir_all(skills_dir.join("rust-debug")).expect("rust skill dir");
     std::fs::write(
         skills_dir.join("rust-debug").join("SKILL.md"),
         "---\nname: rust-debug\ndescription: Debug Rust compiler errors and cargo regressions.\n---\n\n# rust-debug\n",
     )
     .expect("write rust skill");
-
-    let mut config = AppConfig {
-        data_dir: temp.path().join("state-root"),
-        ..AppConfig::default()
-    };
-    config.daemon.skills_dir = skills_dir;
-    let app = build_from_config(config).expect("build app");
     let session = app
         .create_session_auto(Some("CLI Skill Session"))
         .expect("create session");
