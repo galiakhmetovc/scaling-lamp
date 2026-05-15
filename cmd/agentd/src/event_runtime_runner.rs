@@ -704,11 +704,26 @@ fn ensure_telegram_binding_route(
         return Ok(());
     };
     let target_id = format!("telegram-{}", numeric_id_token(chat_id));
-    if store
+    if let Some(mut target) = store
         .get_delivery_target(&target_id)
         .map_err(|error| error.to_string())?
-        .is_none()
     {
+        let mut allowed_sessions =
+            parse_json_string_array(&target.allowed_session_ids_json).unwrap_or_default();
+        if !allowed_sessions.is_empty()
+            && !allowed_sessions
+                .iter()
+                .any(|allowed_session_id| allowed_session_id == session_id)
+        {
+            allowed_sessions.push(session_id.to_string());
+            target.allowed_session_ids_json =
+                serde_json::to_string(&allowed_sessions).map_err(|error| error.to_string())?;
+            target.updated_at = now;
+            store
+                .put_delivery_target(&target)
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
         store
             .put_delivery_target(&DeliveryTargetRecord {
                 target_id: target_id.clone(),
@@ -752,11 +767,30 @@ fn ensure_telegram_binding_route(
     }
 
     let rule_id = format!("rule-telegram-binding-{}", numeric_id_token(chat_id));
-    if store
+    let route_policy_json = serde_json::json!({
+        "session_id": session_id,
+        "agent_id": binding
+            .default_agent_profile_id
+            .as_deref()
+            .unwrap_or("default"),
+        "queue_policy": binding.inbound_queue_mode,
+        "output_targets": [target_id],
+        "format_policy": "full_text",
+        "labels": ["telegram-binding-compat"]
+    })
+    .to_string();
+    if let Some(mut rule) = store
         .get_router_rule(&rule_id)
         .map_err(|error| error.to_string())?
-        .is_none()
     {
+        rule.enabled = true;
+        rule.source_filter_json = serde_json::json!({ "source_id": source_id }).to_string();
+        rule.route_policy_json = route_policy_json;
+        rule.updated_at = now;
+        store
+            .put_router_rule(&rule)
+            .map_err(|error| error.to_string())?;
+    } else {
         store
             .put_router_rule(&RouterRuleRecord {
                 rule_id,
@@ -765,24 +799,17 @@ fn ensure_telegram_binding_route(
                 source_filter_json: serde_json::json!({ "source_id": source_id }).to_string(),
                 operator_filter_json: "{}".to_string(),
                 condition_json: "{}".to_string(),
-                route_policy_json: serde_json::json!({
-                    "session_id": session_id,
-                    "agent_id": binding
-                        .default_agent_profile_id
-                        .as_deref()
-                        .unwrap_or("default"),
-                    "queue_policy": binding.inbound_queue_mode,
-                    "output_targets": [target_id],
-                    "format_policy": "full_text",
-                    "labels": ["telegram-binding-compat"]
-                })
-                .to_string(),
+                route_policy_json,
                 created_at: now,
                 updated_at: now,
             })
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn parse_json_string_array(value: &str) -> Result<Vec<String>, serde_json::Error> {
+    serde_json::from_str(value)
 }
 
 fn materialize_telegram_private_binding(

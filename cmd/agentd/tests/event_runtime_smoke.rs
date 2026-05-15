@@ -221,6 +221,75 @@ fn telegram_binding_materializes_compat_route_when_router_rule_is_missing() {
 }
 
 #[test]
+fn telegram_binding_refreshes_compat_route_when_selected_session_changes() {
+    let (_temp, app) = test_app("http://127.0.0.1:9");
+    let store = store(&app);
+    seed_session_and_telegram_binding(&store);
+
+    let first_webhook =
+        handle_webhook_update(&app, "secret", &telegram_update(904, "old session"), 600)
+            .expect("first webhook");
+    let first_outbox = store
+        .get_event_outbox(first_webhook.outbox_id.as_deref().expect("first outbox id"))
+        .expect("first input outbox")
+        .expect("first input outbox exists");
+    let first_envelope = serde_json::from_str(&first_outbox.payload_json).expect("first envelope");
+    let first_route = route_input_event_envelope(&app, first_envelope, 601).expect("first route");
+    assert_eq!(first_route.session_id, "session-e2e");
+
+    seed_session_with_id(&store, "session-new");
+    let mut binding = store
+        .get_telegram_chat_binding(42)
+        .expect("binding")
+        .expect("binding exists");
+    binding.selected_session_id = Some("session-new".to_string());
+    binding.updated_at = 602;
+    store
+        .put_telegram_chat_binding(&binding)
+        .expect("update binding");
+
+    let second_webhook =
+        handle_webhook_update(&app, "secret", &telegram_update(905, "new session"), 603)
+            .expect("second webhook");
+    let second_outbox = store
+        .get_event_outbox(
+            second_webhook
+                .outbox_id
+                .as_deref()
+                .expect("second outbox id"),
+        )
+        .expect("second input outbox")
+        .expect("second input outbox exists");
+    let second_envelope =
+        serde_json::from_str(&second_outbox.payload_json).expect("second envelope");
+    let second_route =
+        route_input_event_envelope(&app, second_envelope, 604).expect("second route");
+
+    assert_eq!(second_route.session_id, "session-new");
+    let target = store
+        .get_delivery_target("telegram-42")
+        .expect("target")
+        .expect("target exists");
+    let allowed_sessions: Vec<String> =
+        serde_json::from_str(&target.allowed_session_ids_json).expect("allowed sessions");
+    assert!(allowed_sessions.contains(&"session-e2e".to_string()));
+    assert!(allowed_sessions.contains(&"session-new".to_string()));
+    assert!(
+        store
+            .get_session_output_route("route-session-new-telegram-42")
+            .expect("new output route")
+            .is_some()
+    );
+    let rule = store
+        .get_router_rule("rule-telegram-binding-42")
+        .expect("rule")
+        .expect("rule exists");
+    let route_policy: serde_json::Value =
+        serde_json::from_str(&rule.route_policy_json).expect("route policy");
+    assert_eq!(route_policy["session_id"], "session-new");
+}
+
+#[test]
 fn telegram_private_inbound_without_binding_bootstraps_session_and_route() {
     let (_temp, app) = test_app("http://127.0.0.1:9");
     let store = store(&app);
@@ -381,10 +450,14 @@ fn seed_activated_pairing(store: &PersistenceStore) {
 }
 
 fn seed_session(store: &PersistenceStore) {
+    seed_session_with_id(store, "session-e2e");
+}
+
+fn seed_session_with_id(store: &PersistenceStore, session_id: &str) {
     store
         .put_session(&SessionRecord {
-            id: "session-e2e".to_string(),
-            title: "session-e2e".to_string(),
+            id: session_id.to_string(),
+            title: session_id.to_string(),
             prompt_override: None,
             settings_json: serde_json::to_string(&SessionSettings::default()).unwrap(),
             workspace_root: ".".to_string(),
