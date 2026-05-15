@@ -368,6 +368,69 @@ fn build_from_config_normalizes_legacy_non_default_profiles_to_custom_workspaces
 }
 
 #[test]
+fn build_from_config_backfills_legacy_skills_when_profile_already_points_to_workspace() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+    let app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let workspace = data_dir
+        .parent()
+        .expect("data dir parent")
+        .join("workspaces/agents/evolved");
+    fs::create_dir_all(workspace.join("skills")).expect("create workspace skills");
+    fs::write(workspace.join("SYSTEM.md"), "workspace system\n").expect("write workspace system");
+    fs::write(workspace.join("AGENTS.md"), "workspace agents\n").expect("write workspace agents");
+    let legacy_home = data_dir.join("agents/evolved");
+    fs::create_dir_all(legacy_home.join("skills/backfill-me")).expect("create legacy skill");
+    fs::write(
+        legacy_home.join("skills/backfill-me/SKILL.md"),
+        "---\nname: backfill-me\ndescription: Backfill me\n---\n",
+    )
+    .expect("write legacy skill");
+
+    let legacy_profile = AgentProfile::new_with_provenance(
+        "evolved".to_string(),
+        "Evolved".to_string(),
+        AgentTemplateKind::Judge,
+        &workspace,
+        vec!["fs_read_text".to_string()],
+        Some(workspace.clone()),
+        None,
+        None,
+        None,
+        10,
+        10,
+    )
+    .expect("legacy profile");
+    store
+        .put_agent_profile(
+            &AgentProfileRecord::try_from(&legacy_profile).expect("legacy profile record"),
+        )
+        .expect("put legacy profile");
+
+    let migrated_app = build_from_config(AppConfig {
+        data_dir,
+        ..AppConfig::default()
+    })
+    .expect("rebuild app");
+    let migrated = migrated_app
+        .agent_profile("evolved")
+        .expect("migrated profile");
+
+    assert_eq!(migrated.template_kind, AgentTemplateKind::Custom);
+    assert!(workspace.join("skills/backfill-me/SKILL.md").is_file());
+    assert_eq!(
+        fs::read_to_string(workspace.join("SYSTEM.md")).expect("read workspace system"),
+        "workspace system\n"
+    );
+}
+
+#[test]
 fn build_from_config_seeds_current_default_prompts_and_preserves_custom_edits() {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().join("state-root");

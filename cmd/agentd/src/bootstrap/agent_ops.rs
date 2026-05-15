@@ -167,11 +167,20 @@ impl App {
 
         for profile in profiles {
             let workspace = agents::agent_workspace(&self.config.data_dir, &profile.id);
+            let legacy_home = agents::legacy_agent_home(&self.config.data_dir, &profile.id);
             agents::migrate_legacy_agent_home_to_workspace(&profile.agent_home, &workspace)
                 .map_err(|source| BootstrapError::Io {
                     path: workspace.clone(),
                     source,
                 })?;
+            if legacy_home != profile.agent_home {
+                agents::migrate_legacy_agent_home_to_workspace(&legacy_home, &workspace).map_err(
+                    |source| BootstrapError::Io {
+                        path: workspace.clone(),
+                        source,
+                    },
+                )?;
+            }
             ensure_workspace_prompt_file(
                 &workspace.join("SYSTEM.md"),
                 agents::fallback_system_md(&self.config.data_dir, &profile.id),
