@@ -55,13 +55,13 @@ Workspace — это место работы над проектом, а не к
 
 Эти правила намеренно дублируются в built-in `SYSTEM.md`/`AGENTS.md`, потому что модель должна видеть их как поведенческий contract, а не только как operator documentation.
 
-## Текущая модель
+## Историческая модель до миграции
 
-Сейчас:
+Раньше:
 
 - `agent_profiles.agent_home` указывает на `data_dir/agents/<agent_id>`;
 - `agent_profiles.default_workspace_root` для built-in и newly-created profiles указывает на отдельный каталог `workspaces/agents/<agent_id>` рядом с `data_dir`;
-- bootstrap создаёт builtin profiles `default` и `judge`;
+- bootstrap создавал builtin profiles `default` и `judge`;
 - prompt assembly читает `SYSTEM.md`, `AGENTS.md` и skills из `agent_home`;
 - schedules уже имеют поле `workspace_root`;
 - обычные sessions уже имеют persisted `workspace_root` и получают его из выбранного `Agent profile`, если у профиля задан default workspace;
@@ -69,7 +69,7 @@ Workspace — это место работы над проектом, а не к
 
 Вывод: `data_dir/agents/<agent_id>` сейчас ближе к profile home/template copy, чем к workspace.
 
-## Целевая модель
+## Исторический целевой набросок
 
 Цель — разделить три слоя:
 
@@ -102,7 +102,7 @@ Operator-editable templates уже материализуются в `data_dir/a
 
 ```text
 data_dir/agent-templates/
-└── <template_id>/
+└── default/
     ├── SYSTEM.md
     ├── AGENTS.md
     └── skills/
@@ -112,13 +112,10 @@ data_dir/agent-templates/
 
 ```text
 /var/lib/teamd/state/agent-templates/
-├── default/
-│   ├── SYSTEM.md
-│   ├── AGENTS.md
-│   └── skills/
-└── judge/
+└── default/
     ├── SYSTEM.md
-    └── AGENTS.md
+    ├── AGENTS.md
+    └── skills/
 ```
 
 Правка этих файлов не требует пересборки `agentd`. Уже созданный `agent_home` остаётся отдельным экземпляром: если оператор вручную изменил `data_dir/agents/<agent_id>/SYSTEM.md`, bootstrap не должен молча затирать эту правку.

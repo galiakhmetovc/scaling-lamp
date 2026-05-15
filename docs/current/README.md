@@ -48,8 +48,8 @@
 - **tool** — структурированный capability call модели.
 - **artifact** — большой offloaded payload, который не кладут напрямую в prompt.
 - **tool-call ledger** — журнал фактов вызова tools: имя, arguments, статус, ошибка, run/session.
-- **agent home** — каталог prompts/skills конкретного agent profile; это не project workspace.
-- **workspace** — рабочий каталог проекта, где tools читают/пишут файлы и запускают команды.
+- **agent workspace** — canonical каталог конкретного agent profile: `SYSTEM.md`, `AGENTS.md`, `skills/`, scratch/artifacts и default рабочий каталог tools.
+- **workspace** — рабочий каталог, где tools читают/пишут файлы и запускают команды; для новых session по умолчанию равен `agent workspace`.
 - **context summary / compaction** — сжатие истории сессии в summary.
 - **SessionHead** — сжатая сводка о состоянии сессии, которую модель получает перед transcript tail.
 - **Prompt contract** — договорённость о том, какие runtime/user/history blocks модель получает, в каком порядке и с какими ограничениями размера.

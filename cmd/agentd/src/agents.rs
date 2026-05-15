@@ -514,11 +514,23 @@ fn copy_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 fn clone_directory_contents_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
-    if destination.exists() || !source.exists() {
+    if !source.exists() {
         return Ok(());
     }
     fs::create_dir_all(destination)?;
-    clone_directory_contents(source, destination)
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target_path = destination.join(entry.file_name());
+        let metadata = entry.metadata()?;
+
+        if metadata.is_dir() {
+            clone_directory_contents_if_missing(&entry_path, &target_path)?;
+        } else if metadata.is_file() && !target_path.exists() {
+            fs::copy(&entry_path, &target_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn clone_directory_contents(source: &Path, destination: &Path) -> io::Result<()> {

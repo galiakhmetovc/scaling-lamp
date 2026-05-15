@@ -205,7 +205,6 @@ Production layout сейчас такой:
 
 /var/lib/teamd/state/
 ├── agent-templates/default/        # runtime-editable default template
-├── agents/<agent_id>/              # legacy layout, copied to workspace on bootstrap
 ├── artifacts/                      # payload files
 ├── audit/runtime.jsonl             # daemon/runtime audit events
 ├── runs/                           # run payloads
@@ -222,7 +221,6 @@ Production layout сейчас такой:
 
 - `/var/lib/teamd/state` — runtime state, не workspace;
 - `/var/lib/teamd/state/agent-templates/default` — единственный встроенный template;
-- `/var/lib/teamd/state/agents/<agent_id>` — legacy layout старых версий, не primary source;
 - `/var/lib/teamd/workspaces/agents/<agent_id>` — canonical workspace агента, его prompts, skills и рабочая директория tools;
 - `/var/lib/teamd/knowledge/silverbullet/teamd` — knowledge space, не transcript store;
 - `/etc/teamd` — config и env, не runtime data.

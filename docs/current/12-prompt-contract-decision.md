@@ -1161,7 +1161,7 @@ usable_context_tokens = effective_context_window_tokens * auto_compaction_trigge
 
 Сейчас:
 
-- `skill_list` показывает merged skill catalog текущей session: global skills плюс agent-local overrides;
+- `skill_list` показывает skill catalog текущего agent profile из `workspaces/agents/<agent_id>/skills/` с session-scoped activation overrides;
 - `skill_read` читает bounded body конкретного `SKILL.md`;
 - `skill_enable` и `skill_disable` меняют session-scoped activation overrides;
 - все вызовы идут через тот же canonical provider loop и попадают в обычный tool-call ledger.

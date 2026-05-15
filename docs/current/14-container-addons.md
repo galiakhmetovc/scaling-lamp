@@ -23,7 +23,7 @@
 
 - `teamd-silverbullet` — browser UI для canonical Markdown knowledge space;
 - `teamd-silverbullet-mcp` — SilverBullet MCP bridge;
-- `teamd-filebrowser` — browser UI для редактирования agent homes, `SYSTEM.md`, `AGENTS.md`, `skills/`, workspaces, artifacts и knowledge files;
+- `teamd-filebrowser` — browser UI для редактирования agent workspaces, `SYSTEM.md`, `AGENTS.md`, `skills/`, artifacts и knowledge files;
 - `teamd-jaeger` — Jaeger UI и OTLP receiver для traces;
 - `teamd-browserless` + `agent-browser` — recommended browser automation backend для built-in `browser_*` tools;
 - Mem0/OpenMemory REST endpoint — optional semantic long-term memory backend для built-in `memory_*` tools.
@@ -227,7 +227,6 @@ TEAMD_SILVERBULLET_MCP_REF='v1.1.0'
 
 File Browser нужен оператору как простой web editor для runtime-owned файлов, которые неудобно править через SSH:
 
-- agent homes: `/var/lib/teamd/state/agents`;
 - agent workspaces: `/var/lib/teamd/workspaces`;
 - artifacts: `/var/lib/teamd/state/artifacts`;
 - knowledge files: `/var/lib/teamd/knowledge`;
@@ -279,10 +278,10 @@ Built-in default agent получает skills текущего production stack
 - `planning-session-lifecycle` — plan, schedules, `continue_later`, session lifecycle;
 - `agent-browser` — built-in `browser_*` tools.
 
-Путь в agent home:
+Путь в workspace конкретного agent profile:
 
 ```text
-/var/lib/teamd/state/agents/default/skills/<skill-name>/SKILL.md
+/var/lib/teamd/workspaces/agents/default/skills/<skill-name>/SKILL.md
 ```
 
 Путь в runtime template:
@@ -291,12 +290,12 @@ Built-in default agent получает skills текущего production stack
 /var/lib/teamd/state/agent-templates/default/skills/<skill-name>/SKILL.md
 ```
 
-Если нужно поменять shipped skill без пересборки `agentd`, правьте runtime template. Если нужно поменять только поведение уже существующего `default` agent profile, правьте `agents/default/skills/...` напрямую. Bootstrap создаёт отсутствующие template-файлы из bundled repo `agent-templates/`, но не должен молча затирать operator-modified agent files.
+Если нужно поменять shipped skill без пересборки `agentd`, правьте runtime template. Если нужно поменять только поведение уже существующего agent profile, правьте `workspaces/agents/<agent_id>/skills/...` напрямую. Bootstrap создаёт отсутствующие template-файлы из bundled repo `agent-templates/`, но не должен молча затирать operator-modified agent files.
 
 Рекомендуемый workflow правки skill через File Browser:
 
 1. Открыть `/srv/state/agent-templates/default/skills/<skill-name>/SKILL.md`, если нужно поменять template для будущих/synced profiles.
-2. Открыть `/srv/state/agents/<agent_id>/skills/<skill-name>/SKILL.md`, если нужно поменять только конкретный agent profile.
+2. Открыть `/srv/workspaces/agents/<agent_id>/skills/<skill-name>/SKILL.md`, если нужно поменять только конкретный agent profile.
 3. После правки проверить catalog и activation:
 
 ```bash

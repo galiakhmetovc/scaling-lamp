@@ -189,26 +189,37 @@ impl App {
                 source,
             })?;
 
-            if profile.agent_home == workspace
-                && profile.default_workspace_root.as_ref() == Some(&workspace)
-            {
-                continue;
-            }
-
             agent_persistence::validate_workspace_root_path(
                 "agent.default_workspace_root",
                 &workspace,
                 &self.config.data_dir,
             )
             .map_err(BootstrapError::Config)?;
+            let normalized_template_kind = if profile.id == agents::DEFAULT_AGENT_ID {
+                AgentTemplateKind::Default
+            } else {
+                AgentTemplateKind::Custom
+            };
+            let normalized_created_from_template_id = if profile.id == agents::DEFAULT_AGENT_ID {
+                None
+            } else {
+                Some(agents::DEFAULT_AGENT_ID.to_string())
+            };
+            if profile.agent_home == workspace
+                && profile.default_workspace_root.as_ref() == Some(&workspace)
+                && profile.template_kind == normalized_template_kind
+                && profile.created_from_template_id == normalized_created_from_template_id
+            {
+                continue;
+            }
             let updated = AgentProfile::new_with_provenance(
                 profile.id,
                 profile.name,
-                profile.template_kind,
+                normalized_template_kind,
                 &workspace,
                 profile.allowed_tools,
                 Some(workspace.clone()),
-                profile.created_from_template_id,
+                normalized_created_from_template_id,
                 profile.created_by_session_id,
                 profile.created_by_agent_profile_id,
                 profile.created_at,

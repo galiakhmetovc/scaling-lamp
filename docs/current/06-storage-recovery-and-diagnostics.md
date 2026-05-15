@@ -9,10 +9,12 @@
 - PostgreSQL — metadata/control plane: sessions, runs, jobs, schedules, ledgers, search indexes, KV, Telegram bindings
 - `artifacts/` — бинарные payload’ы
 - `archives/` — архивы сессий
-- `agents/` — agent home directories, которые bootstrap создаёт рядом с store
+- `agent-templates/default/` — единственный runtime-editable default template
 - `runs/` — run-related payload storage
 - `transcripts/` — transcript payload storage, новые записи группируются по `session_id`
 - `audit/runtime.jsonl` — structured diagnostic log
+
+Canonical agent workspaces лежат рядом с `data_dir`, а не внутри него: `<data_dir-parent>/workspaces/agents/<agent_id>/`.
 
 То есть состояние — это не “только PostgreSQL”. PostgreSQL хранит control-plane metadata и индексы, а большие тела лежат рядом на файловой системе как payload-файлы. Начиная с релиза 1.2.0 старый embedded local DB не является поддерживаемым runtime store: `agentd` не открывает старые DB-файлы, не мигрирует их и не держит rollback-путь.
 
@@ -26,14 +28,16 @@
 └── teamd.env
 
 /var/lib/teamd/state/
-├── agents/
-├── agent-templates/
+├── agent-templates/default/
 ├── archives/
 ├── artifacts/
 ├── audit/
 ├── runs/
 ├── transcripts/
 └── USER.md
+
+/var/lib/teamd/workspaces/agents/
+└── <agent_id>/                  # SYSTEM.md, AGENTS.md, skills/, scratch/artifacts
 
 /var/lib/teamd/knowledge/silverbullet/teamd/
 ├── a/teamd-agents.md
@@ -269,7 +273,7 @@ Retry policy настраивается через `runtime_timing.store_retry_d
 Практический порядок для production:
 
 - `TEAMD_DATABASE_URL` обязателен для daemon, Telegram worker, `teamdctl` и любых ручных operator commands.
-- `data_dir` остаётся владельцем payload directories (`artifacts/`, `transcripts/`, `archives/`, `runs/`) и agent homes.
+- `data_dir` остаётся владельцем payload directories (`artifacts/`, `transcripts/`, `archives/`, `runs/`), а canonical agent workspaces лежат в `<data_dir-parent>/workspaces/agents/<agent_id>/`.
 - Перед переносом старого узла делайте полный backup PostgreSQL + `data_dir`; rollback через старый embedded store больше не является поддерживаемым сценарием.
 
 ## Почему store больше не должен тормозить TUI

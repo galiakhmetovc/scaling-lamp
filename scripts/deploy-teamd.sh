@@ -689,7 +689,6 @@ data_dir = "$DATA_DIR"
 [daemon]
 bind_host = "127.0.0.1"
 bind_port = 5140
-skills_dir = "skills"
 worker_lease_owner = "daemon"
 
 [database]

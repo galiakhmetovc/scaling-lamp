@@ -1,5 +1,6 @@
 use super::support::*;
-use agent_runtime::agent::AgentTemplateKind;
+use agent_persistence::AgentProfileRecord;
+use agent_runtime::agent::{AgentProfile, AgentTemplateKind};
 use agent_runtime::tool::{AgentCreateInput, AgentListInput, AgentReadInput};
 use std::path::Path;
 
@@ -284,6 +285,86 @@ fn create_agent_from_template_copies_template_files_independently() {
         .expect("get created agent profile")
         .expect("created profile exists");
     assert_eq!(stored.template_kind, "custom");
+}
+
+#[test]
+fn build_from_config_normalizes_legacy_non_default_profiles_to_custom_workspaces() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let data_dir = temp.path().join("state-root");
+    let app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("build app");
+    let store = PersistenceStore::open(&app.persistence).expect("open store");
+
+    let legacy_home = data_dir.join("agents/judge");
+    fs::create_dir_all(legacy_home.join("skills/legacy-review")).expect("create legacy skill");
+    fs::write(legacy_home.join("SYSTEM.md"), "legacy judge system\n").expect("write system");
+    fs::write(legacy_home.join("AGENTS.md"), "legacy judge agents\n").expect("write agents");
+    fs::write(
+        legacy_home.join("skills/legacy-review/SKILL.md"),
+        "---\nname: legacy-review\ndescription: Legacy review skill\n---\n",
+    )
+    .expect("write skill");
+
+    let legacy_profile = AgentProfile::new_with_provenance(
+        "judge".to_string(),
+        "Judge".to_string(),
+        AgentTemplateKind::Judge,
+        &legacy_home,
+        vec!["fs_read_text".to_string()],
+        None,
+        None,
+        None,
+        None,
+        10,
+        10,
+    )
+    .expect("legacy profile");
+    store
+        .put_agent_profile(
+            &AgentProfileRecord::try_from(&legacy_profile).expect("legacy profile record"),
+        )
+        .expect("put legacy profile");
+
+    let migrated_app = build_from_config(AppConfig {
+        data_dir: data_dir.clone(),
+        ..AppConfig::default()
+    })
+    .expect("rebuild app");
+    let migrated = migrated_app
+        .agent_profile("judge")
+        .expect("migrated judge profile");
+
+    let expected_workspace = data_dir
+        .parent()
+        .expect("data dir parent")
+        .join("workspaces/agents/judge");
+    assert_eq!(migrated.template_kind, AgentTemplateKind::Custom);
+    assert_eq!(migrated.agent_home, expected_workspace);
+    assert_eq!(
+        migrated.default_workspace_root.as_deref(),
+        Some(expected_workspace.as_path())
+    );
+    assert_eq!(
+        migrated.created_from_template_id.as_deref(),
+        Some("default")
+    );
+    assert_eq!(migrated.allowed_tools, vec!["fs_read_text"]);
+    assert_eq!(
+        fs::read_to_string(expected_workspace.join("SYSTEM.md")).expect("read migrated system"),
+        "legacy judge system\n"
+    );
+    assert_eq!(
+        fs::read_to_string(expected_workspace.join("AGENTS.md")).expect("read migrated agents"),
+        "legacy judge agents\n"
+    );
+    assert!(
+        expected_workspace
+            .join("skills/legacy-review/SKILL.md")
+            .is_file()
+    );
 }
 
 #[test]

@@ -849,7 +849,7 @@ skill_list({
 
 Что делает:
 
-- показывает merged skill catalog для текущей session: global skills плюс agent-local overrides;
+- показывает skill catalog текущего agent profile из `workspaces/agents/<agent_id>/skills/` с session-scoped activation overrides;
 - возвращает `name`, `description`, activation `mode`, `skill_dir`, `skill_md_path`;
 - по умолчанию `include_inactive=true`, чтобы модель могла обнаружить полный каталог до активации;
 - поддерживает пагинацию.

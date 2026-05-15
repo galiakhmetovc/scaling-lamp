@@ -238,7 +238,7 @@ Options:
                          Write an agentd stdio MCP connector example for SilverBullet.
   --with-browserless     Deploy Browserless and install/configure agent-browser.
   --with-agent-browser   Install/configure agent-browser without deploying Browserless.
-  --with-filebrowser     Deploy File Browser for operator editing of agent homes,
+  --with-filebrowser     Deploy File Browser for operator editing of agent workspaces,
                          skills, approved workspaces, artifacts, and knowledge files.
   --single-domain       With TEAMD_CADDY_DOMAIN, publish all add-ons on that
                          exact host: /sb/, /searxng/, /jaeger/, /files/.
