@@ -145,6 +145,11 @@ fi
 \$SUDO install -m 0755 -o root -g root "\$remote_tmp" "\$remote_bin"
 \$SUDO rm -f "\$remote_tmp"
 \$SUDO ln -sf "\$remote_bin" "\$remote_link"
+if [ -r /etc/teamd/teamd.env ]; then
+  set -a
+  . /etc/teamd/teamd.env
+  set +a
+fi
 "\$remote_bin" version || true
 if [ "$RESTART_SERVICES" -eq 1 ]; then
   \$SUDO systemctl daemon-reload
@@ -154,7 +159,11 @@ if [ "$RESTART_SERVICES" -eq 1 ]; then
   else
     echo "telegram service restart skipped: \$telegram_service is disabled and inactive"
   fi
-  \$SUDO systemctl --no-pager --lines=0 status "\$daemon_service" "\$telegram_service"
+  \$SUDO systemctl is-active --quiet "\$daemon_service"
+  \$SUDO systemctl --no-pager --lines=0 status "\$daemon_service" || true
+  if \$SUDO systemctl is-enabled --quiet "\$telegram_service" 2>/dev/null || \$SUDO systemctl is-active --quiet "\$telegram_service" 2>/dev/null; then
+    \$SUDO systemctl --no-pager --lines=0 status "\$telegram_service" || true
+  fi
 else
   echo "service restart skipped"
 fi
