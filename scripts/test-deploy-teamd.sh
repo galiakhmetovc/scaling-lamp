@@ -65,6 +65,11 @@ assert_contains "$dry_run_output" "/usr/local/bin/teamdctl"
 assert_contains "$dry_run_output" "telegram pair"
 assert_contains "$dry_run_output" "session list"
 
+kimi_help_output=$(TEAMD_PROVIDER_KIND='kimi_anthropic_messages' "$DEPLOY_SCRIPT" --help)
+assert_contains "$kimi_help_output" "Provider kind, default: kimi_anthropic_messages"
+assert_contains "$kimi_help_output" "Provider API base, default: https://api.kimi.com/coding"
+assert_contains "$kimi_help_output" "Provider model, default: kimi-for-coding"
+
 containers_dry_run_output=$(
   "$CONTAINERS_DEPLOY_SCRIPT" --dry-run --non-interactive --no-start 2>&1
 )

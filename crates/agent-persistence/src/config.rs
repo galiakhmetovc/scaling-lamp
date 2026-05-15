@@ -16,6 +16,8 @@ use std::time::Duration;
 
 const DEFAULT_ZAI_API_BASE: &str = "https://api.z.ai/api/coding/paas/v4";
 const DEFAULT_ZAI_MODEL: &str = "glm-5-turbo";
+const DEFAULT_KIMI_API_BASE: &str = "https://api.kimi.com/coding";
+const DEFAULT_KIMI_MODEL: &str = "kimi-for-coding";
 const DEFAULT_DAEMON_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_DAEMON_BIND_PORT: u16 = 5140;
 const DEFAULT_DAEMON_SKILLS_DIR: &str = "skills";
@@ -1745,6 +1747,13 @@ impl AppConfig {
         }
         if provider.kind == ProviderKind::ZaiChatCompletions && provider.default_model.is_none() {
             provider.default_model = Some(DEFAULT_ZAI_MODEL.to_string());
+        }
+        if provider.kind == ProviderKind::KimiAnthropicMessages && provider.api_base.is_none() {
+            provider.api_base = Some(DEFAULT_KIMI_API_BASE.to_string());
+        }
+        if provider.kind == ProviderKind::KimiAnthropicMessages && provider.default_model.is_none()
+        {
+            provider.default_model = Some(DEFAULT_KIMI_MODEL.to_string());
         }
 
         let config = Self {

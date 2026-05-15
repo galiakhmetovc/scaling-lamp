@@ -80,6 +80,7 @@ export TEAMD_DATABASE_URL='postgresql://teamd:password@127.0.0.1:5432/teamd'
 
 - `openai_responses` — OpenAI Responses API;
 - `zai_chat_completions` — Z.ai Chat Completions-compatible API.
+- `kimi_anthropic_messages` — Kimi Code Anthropic-compatible Messages API.
 
 Для Z.ai достаточно указать kind и ключ в environment:
 
@@ -98,6 +99,27 @@ export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 - `default_model = "glm-5-turbo"`
 
 `/chat/completions` дописывать в `api_base` не надо: driver добавляет endpoint сам.
+
+Для Kimi Code используется Anthropic-compatible endpoint из официальной документации Kimi:
+
+```toml
+[provider]
+kind = "kimi_anthropic_messages"
+api_base = "https://api.kimi.com/coding"
+default_model = "kimi-for-coding"
+max_output_tokens = 32768
+```
+
+```bash
+export TEAMD_PROVIDER_API_KEY='replace-with-kimi-key'
+```
+
+Если `api_base` и `default_model` не заданы, runtime использует Kimi defaults:
+
+- `api_base = "https://api.kimi.com/coding"`
+- `default_model = "kimi-for-coding"`
+
+Legacy alias `kimi_chat_completions` пока принимается и мапится на `kimi_anthropic_messages`, но новый конфиг должен использовать явное имя `kimi_anthropic_messages`.
 
 ### `[permissions]`
 

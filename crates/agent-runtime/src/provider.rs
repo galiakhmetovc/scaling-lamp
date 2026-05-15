@@ -26,6 +26,8 @@ pub enum ProviderKind {
     #[default]
     OpenAiResponses,
     ZaiChatCompletions,
+    #[serde(alias = "kimi_chat_completions")]
+    KimiAnthropicMessages,
 }
 
 pub const DEFAULT_PROVIDER_MAX_TOOL_ROUNDS: u32 = 24;
@@ -207,6 +209,15 @@ pub struct ZaiChatCompletionsConfig {
     pub stream_idle_timeout_seconds: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KimiAnthropicMessagesConfig {
+    pub api_base: String,
+    pub api_key: String,
+    pub default_model: Option<String>,
+    pub connect_timeout_seconds: Option<u64>,
+    pub request_timeout_seconds: Option<u64>,
+}
+
 pub trait ProviderResponseStream: Send {
     fn next_event(&mut self) -> Result<Option<ProviderStreamEvent>, ProviderError>;
 }
@@ -231,6 +242,13 @@ pub struct OpenAiResponsesDriver {
 pub struct ZaiChatCompletionsDriver {
     client: Client,
     config: ZaiChatCompletionsConfig,
+    descriptor: ProviderDescriptor,
+}
+
+#[derive(Debug, Clone)]
+pub struct KimiAnthropicMessagesDriver {
+    client: Client,
+    config: KimiAnthropicMessagesConfig,
     descriptor: ProviderDescriptor,
 }
 
@@ -331,7 +349,8 @@ struct OpenAiResponsesUsage {
 struct ZaiChatCompletionsRequest<'a> {
     model: &'a str,
     messages: Vec<ZaiChatCompletionMessage<'a>>,
-    thinking: ZaiThinkingConfig<'static>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ZaiThinkingConfig<'static>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ZaiChatCompletionToolDefinition<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -341,6 +360,49 @@ struct ZaiChatCompletionsRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct KimiAnthropicMessagesRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+    messages: Vec<KimiAnthropicMessage<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<KimiAnthropicToolDefinition<'a>>,
+    stream: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct KimiAnthropicMessage<'a> {
+    role: &'static str,
+    content: Vec<KimiAnthropicContentBlock<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum KimiAnthropicContentBlock<'a> {
+    #[serde(rename = "text")]
+    Text { text: &'a str },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: &'a str,
+        name: &'a str,
+        input: Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: &'a str,
+        content: &'a str,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct KimiAnthropicToolDefinition<'a> {
+    name: &'a str,
+    description: &'a str,
+    input_schema: &'a Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,6 +496,31 @@ struct ZaiChatCompletionsUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct KimiAnthropicMessagesResponse {
+    id: String,
+    model: String,
+    content: Vec<KimiAnthropicResponseContentBlock>,
+    stop_reason: Option<String>,
+    usage: Option<KimiAnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KimiAnthropicResponseContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    text: Option<String>,
+    id: Option<String>,
+    name: Option<String>,
+    input: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KimiAnthropicUsage {
+    input_tokens: u32,
+    output_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -536,6 +623,7 @@ impl ProviderKind {
         match self {
             Self::OpenAiResponses => "openai_responses",
             Self::ZaiChatCompletions => "zai_chat_completions",
+            Self::KimiAnthropicMessages => "kimi_anthropic_messages",
         }
     }
 }
@@ -547,6 +635,7 @@ impl TryFrom<&str> for ProviderKind {
         match value {
             "openai_responses" => Ok(Self::OpenAiResponses),
             "zai_chat_completions" => Ok(Self::ZaiChatCompletions),
+            "kimi_anthropic_messages" | "kimi_chat_completions" => Ok(Self::KimiAnthropicMessages),
             _ => Err(ProviderKindParseError {
                 value: value.to_string(),
             }),
@@ -585,6 +674,15 @@ pub fn build_driver(
                 connect_timeout_seconds: provider.connect_timeout_seconds,
                 request_timeout_seconds: provider.request_timeout_seconds,
                 stream_idle_timeout_seconds: provider.stream_idle_timeout_seconds,
+            },
+        ))),
+        ProviderKind::KimiAnthropicMessages => Ok(Box::new(KimiAnthropicMessagesDriver::new(
+            KimiAnthropicMessagesConfig {
+                api_base,
+                api_key,
+                default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
             },
         ))),
     }
@@ -644,6 +742,25 @@ pub fn render_http_request_preview(
                 rendered_body,
             ))
         }
+        ProviderKind::KimiAnthropicMessages => {
+            let driver = KimiAnthropicMessagesDriver::new(KimiAnthropicMessagesConfig {
+                api_base,
+                api_key: api_key.clone(),
+                default_model: provider.default_model.clone(),
+                connect_timeout_seconds: provider.connect_timeout_seconds,
+                request_timeout_seconds: provider.request_timeout_seconds,
+            });
+            let model = driver.resolve_model(request)?;
+            let body = driver.build_request_body(request, model)?;
+            let rendered_body =
+                serde_json::to_string_pretty(&body).map_err(ProviderError::Parse)?;
+            Ok(render_anthropic_http_preview_text(
+                driver.endpoint(),
+                ProviderStreamMode::Disabled,
+                api_key.as_str(),
+                rendered_body,
+            ))
+        }
     }
 }
 
@@ -661,6 +778,29 @@ fn render_http_preview_text(
     [
         format!("POST {endpoint}"),
         format!("Authorization: Bearer {}", redact_api_key(api_key)),
+        "Content-Type: application/json".to_string(),
+        format!("Accept: {accept}"),
+        String::new(),
+        rendered_body,
+    ]
+    .join("\n")
+}
+
+fn render_anthropic_http_preview_text(
+    endpoint: String,
+    stream: ProviderStreamMode,
+    api_key: &str,
+    rendered_body: String,
+) -> String {
+    let accept = if stream == ProviderStreamMode::Enabled {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    [
+        format!("POST {endpoint}"),
+        format!("x-api-key: {}", redact_api_key(api_key)),
+        "anthropic-version: 2023-06-01".to_string(),
         "Content-Type: application/json".to_string(),
         format!("Accept: {accept}"),
         String::new(),
@@ -692,6 +832,12 @@ impl OpenAiResponsesConfig {
 }
 
 impl ZaiChatCompletionsConfig {
+    fn normalized_api_base(&self) -> &str {
+        self.api_base.trim_end_matches('/')
+    }
+}
+
+impl KimiAnthropicMessagesConfig {
     fn normalized_api_base(&self) -> &str {
         self.api_base.trim_end_matches('/')
     }
@@ -932,7 +1078,7 @@ impl ZaiChatCompletionsDriver {
         Ok(ZaiChatCompletionsRequest {
             model,
             messages,
-            thinking: ZaiThinkingConfig {
+            thinking: Some(ZaiThinkingConfig {
                 thinking_type: if request.stream == ProviderStreamMode::Enabled
                     && !think_level_disables_reasoning(request.think_level.as_deref())
                 {
@@ -940,7 +1086,7 @@ impl ZaiChatCompletionsDriver {
                 } else {
                     "disabled"
                 },
-            },
+            }),
             tools,
             tool_choice: (!request.tools.is_empty()).then_some("auto"),
             tool_stream: (request.stream == ProviderStreamMode::Enabled
@@ -948,6 +1094,163 @@ impl ZaiChatCompletionsDriver {
             .then_some(true),
             max_tokens: request.max_output_tokens,
             stream: request.stream == ProviderStreamMode::Enabled,
+        })
+    }
+}
+
+impl KimiAnthropicMessagesDriver {
+    pub fn new(config: KimiAnthropicMessagesConfig) -> Self {
+        Self {
+            client: build_http_client(
+                config.connect_timeout_seconds,
+                config.request_timeout_seconds,
+            ),
+            descriptor: ProviderDescriptor {
+                name: "kimi-anthropic-messages".to_string(),
+                model_family: "kimi".to_string(),
+                default_model: config.default_model.clone(),
+                capabilities: ModelCapabilities {
+                    supports_streaming: false,
+                    supports_text_input: true,
+                    supports_tool_calls: true,
+                    supports_previous_response_id: false,
+                    supports_reasoning_summaries: false,
+                },
+            },
+            config,
+        }
+    }
+
+    fn endpoint(&self) -> String {
+        let base = self.config.normalized_api_base();
+        if base.ends_with("/v1") {
+            format!("{base}/messages")
+        } else {
+            format!("{base}/v1/messages")
+        }
+    }
+
+    fn resolve_model<'a>(&'a self, request: &'a ProviderRequest) -> Result<&'a str, ProviderError> {
+        request
+            .model
+            .as_deref()
+            .or(self.config.default_model.as_deref())
+            .ok_or(ProviderError::MissingModel)
+    }
+
+    fn build_request_body<'a>(
+        &'a self,
+        request: &'a ProviderRequest,
+        model: &'a str,
+    ) -> Result<KimiAnthropicMessagesRequest<'a>, ProviderError> {
+        let mut system_parts = Vec::new();
+        if let Some(instructions) = request.instructions.as_deref() {
+            system_parts.push(instructions.to_string());
+        }
+
+        let mut messages = Vec::new();
+        for message in &request.messages {
+            match message.role {
+                MessageRole::System => system_parts.push(message.content.clone()),
+                MessageRole::User => messages.push(KimiAnthropicMessage {
+                    role: "user",
+                    content: vec![KimiAnthropicContentBlock::Text {
+                        text: message.content.as_str(),
+                    }],
+                }),
+                MessageRole::Assistant => messages.push(KimiAnthropicMessage {
+                    role: "assistant",
+                    content: vec![KimiAnthropicContentBlock::Text {
+                        text: message.content.as_str(),
+                    }],
+                }),
+                MessageRole::Tool => {
+                    return Err(ProviderError::UnsupportedMessageRole { role: message.role });
+                }
+            }
+        }
+
+        for message in &request.continuation_messages {
+            match message {
+                ProviderContinuationMessage::AssistantToolCalls { tool_calls } => {
+                    messages.push(KimiAnthropicMessage {
+                        role: "assistant",
+                        content: tool_calls
+                            .iter()
+                            .map(|tool_call| {
+                                Ok(KimiAnthropicContentBlock::ToolUse {
+                                    id: tool_call.call_id.as_str(),
+                                    name: tool_call.name.as_str(),
+                                    input: serde_json::from_str(tool_call.arguments.as_str())
+                                        .map_err(ProviderError::Parse)?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, ProviderError>>()?,
+                    });
+                }
+                ProviderContinuationMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                } => {
+                    messages.push(KimiAnthropicMessage {
+                        role: "user",
+                        content: vec![KimiAnthropicContentBlock::ToolResult {
+                            tool_use_id: tool_call_id.as_str(),
+                            content: content.as_str(),
+                        }],
+                    });
+                }
+                ProviderContinuationMessage::Message { role, content } => match role {
+                    MessageRole::System => system_parts.push(content.clone()),
+                    MessageRole::User => messages.push(KimiAnthropicMessage {
+                        role: "user",
+                        content: vec![KimiAnthropicContentBlock::Text {
+                            text: content.as_str(),
+                        }],
+                    }),
+                    MessageRole::Assistant => messages.push(KimiAnthropicMessage {
+                        role: "assistant",
+                        content: vec![KimiAnthropicContentBlock::Text {
+                            text: content.as_str(),
+                        }],
+                    }),
+                    MessageRole::Tool => {
+                        return Err(ProviderError::UnsupportedMessageRole { role: *role });
+                    }
+                },
+            }
+        }
+
+        messages.extend(
+            request
+                .tool_outputs
+                .iter()
+                .map(|output| KimiAnthropicMessage {
+                    role: "user",
+                    content: vec![KimiAnthropicContentBlock::ToolResult {
+                        tool_use_id: output.call_id.as_str(),
+                        content: output.output.as_str(),
+                    }],
+                }),
+        );
+
+        let tools = request
+            .tools
+            .iter()
+            .map(|tool| KimiAnthropicToolDefinition {
+                name: tool.name.as_str(),
+                description: tool.description.as_str(),
+                input_schema: &tool.parameters,
+            })
+            .collect();
+
+        Ok(KimiAnthropicMessagesRequest {
+            model,
+            max_tokens: request.max_output_tokens.unwrap_or(32768),
+            system: (!system_parts.is_empty()).then(|| system_parts.join("\n\n")),
+            messages,
+            tools,
+            stream: false,
         })
     }
 }
@@ -1428,6 +1731,92 @@ impl ProviderDriver for ZaiChatCompletionsDriver {
             usage: None,
             done: false,
         }))
+    }
+}
+
+impl ProviderDriver for KimiAnthropicMessagesDriver {
+    fn descriptor(&self) -> &ProviderDescriptor {
+        &self.descriptor
+    }
+
+    fn complete(&self, request: &ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        let model = self.resolve_model(request)?;
+        let body = self.build_request_body(request, model)?;
+        let response = self
+            .client
+            .post(self.endpoint())
+            .header("x-api-key", &self.config.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .map_err(ProviderError::Http)?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().map_err(ProviderError::Http)?;
+            return Err(ProviderError::HttpStatus { status, body });
+        }
+
+        let response = response
+            .json::<KimiAnthropicMessagesResponse>()
+            .map_err(ProviderError::Http)?;
+        let output_text = response
+            .content
+            .iter()
+            .filter(|block| block.block_type == "text")
+            .filter_map(|block| block.text.as_deref())
+            .collect::<String>();
+        let tool_calls = response
+            .content
+            .iter()
+            .filter(|block| block.block_type == "tool_use")
+            .map(|block| {
+                let call_id = block
+                    .id
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "id" })?;
+                let name = block
+                    .name
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "name" })?;
+                let input = block
+                    .input
+                    .clone()
+                    .ok_or(ProviderError::ResponseMissingToolCallField { field: "input" })?;
+                Ok(ProviderToolCall {
+                    call_id,
+                    name,
+                    arguments: serde_json::to_string(&input).map_err(ProviderError::Parse)?,
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+
+        ensure_response_has_primary_output(output_text.as_str(), &tool_calls)?;
+
+        let finish_reason = match response.stop_reason.as_deref() {
+            Some("end_turn") | Some("stop_sequence") => FinishReason::Completed,
+            _ => FinishReason::Incomplete,
+        };
+
+        Ok(ProviderResponse {
+            response_id: response.id,
+            model: response.model,
+            output_text,
+            tool_calls,
+            finish_reason,
+            usage: response.usage.map(|usage| ProviderUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                total_tokens: usage.input_tokens + usage.output_tokens,
+            }),
+        })
+    }
+
+    fn stream(
+        &self,
+        _request: &ProviderRequest,
+    ) -> Result<Box<dyn ProviderResponseStream>, ProviderError> {
+        Err(ProviderError::UnsupportedStreaming)
     }
 }
 

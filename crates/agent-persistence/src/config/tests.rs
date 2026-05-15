@@ -1,6 +1,6 @@
 use super::{
-    AppConfig, ConfigEnv, ConfigError, DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL,
-    load_dotenv_from_locations, parse_dotenv,
+    AppConfig, ConfigEnv, ConfigError, DEFAULT_KIMI_API_BASE, DEFAULT_KIMI_MODEL,
+    DEFAULT_ZAI_API_BASE, DEFAULT_ZAI_MODEL, load_dotenv_from_locations, parse_dotenv,
 };
 use agent_runtime::permission::{PermissionAction, PermissionMode};
 use agent_runtime::provider::ProviderKind;
@@ -1292,6 +1292,32 @@ fn load_uses_zai_defaults_when_provider_kind_is_selected() {
     assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1200));
     assert_eq!(config.provider.max_tool_rounds, Some(24));
     assert_eq!(config.provider.max_output_tokens, None);
+}
+
+#[test]
+fn load_uses_kimi_defaults_when_provider_kind_is_selected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut env = base_env(temp.path());
+    env.xdg_config_home = None;
+    env.provider_api_key_override = Some("kimi-key".to_string());
+    env.provider_kind_override = Some("kimi_anthropic_messages".to_string());
+
+    let config = AppConfig::load_from_env(&env).expect("load config");
+
+    assert_eq!(config.provider.kind, ProviderKind::KimiAnthropicMessages);
+    assert_eq!(
+        config.provider.api_base.as_deref(),
+        Some(DEFAULT_KIMI_API_BASE)
+    );
+    assert_eq!(config.provider.api_key.as_deref(), Some("kimi-key"));
+    assert_eq!(
+        config.provider.default_model.as_deref(),
+        Some(DEFAULT_KIMI_MODEL)
+    );
+    assert_eq!(config.provider.connect_timeout_seconds, Some(15));
+    assert_eq!(config.provider.request_timeout_seconds, None);
+    assert_eq!(config.provider.stream_idle_timeout_seconds, Some(1200));
+    assert_eq!(config.provider.max_tool_rounds, Some(24));
 }
 
 #[test]

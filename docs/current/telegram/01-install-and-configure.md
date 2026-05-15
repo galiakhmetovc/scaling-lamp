@@ -196,7 +196,7 @@ mode = "default"
 
 Worker применяет эти интервалы ко всем отправкам: `sendMessage`, `editMessageText`, `deleteMessage`, `sendChatAction`, `sendDocument`. При временной ошибке Bot API delivery повторяется несколько раз и пишет событие в `audit/runtime.jsonl`.
 
-## 5. Настроить Z.ai provider
+## 5. Настроить LLM provider
 
 Для Z.ai используйте provider kind:
 
@@ -236,6 +236,18 @@ export TEAMD_PROVIDER_KIND='zai_chat_completions'
 export TEAMD_PROVIDER_API_KEY='replace-with-zai-key'
 export TEAMD_PROVIDER_MODEL='glm-5-turbo'
 ```
+
+Для Kimi Code используйте provider kind:
+
+```toml
+[provider]
+kind = "kimi_anthropic_messages"
+api_base = "https://api.kimi.com/coding"
+default_model = "kimi-for-coding"
+max_output_tokens = 32768
+```
+
+Ключ также задаётся через `TEAMD_PROVIDER_API_KEY`. Если `api_base` и `default_model` не заданы, `agentd` использует эти Kimi defaults автоматически.
 
 Проверка provider:
 

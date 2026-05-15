@@ -33,8 +33,22 @@ SERVICE_GROUP=${TEAMD_DEPLOY_GROUP:-$SERVICE_USER}
 DAEMON_SERVICE=${TEAMD_DEPLOY_DAEMON_SERVICE:-teamd-daemon.service}
 TELEGRAM_SERVICE=${TEAMD_DEPLOY_TELEGRAM_SERVICE:-teamd-telegram.service}
 PROVIDER_KIND=${TEAMD_PROVIDER_KIND:-zai_chat_completions}
-PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-https://api.z.ai/api/coding/paas/v4}
-PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-glm-5-turbo}
+case "$PROVIDER_KIND" in
+  kimi_chat_completions|kimi_anthropic_messages)
+    PROVIDER_DEFAULT_API_BASE=https://api.kimi.com/coding
+    PROVIDER_DEFAULT_MODEL=kimi-for-coding
+    ;;
+  zai_chat_completions)
+    PROVIDER_DEFAULT_API_BASE=https://api.z.ai/api/coding/paas/v4
+    PROVIDER_DEFAULT_MODEL=glm-5-turbo
+    ;;
+  *)
+    PROVIDER_DEFAULT_API_BASE=https://api.openai.com/v1
+    PROVIDER_DEFAULT_MODEL=gpt-5.4
+    ;;
+esac
+PROVIDER_API_BASE=${TEAMD_PROVIDER_API_BASE:-$PROVIDER_DEFAULT_API_BASE}
+PROVIDER_MODEL=${TEAMD_PROVIDER_MODEL:-$PROVIDER_DEFAULT_MODEL}
 TELEGRAM_TOKEN=${TEAMD_TELEGRAM_BOT_TOKEN:-}
 TELEGRAM_MODE=${TEAMD_TELEGRAM_MODE:-polling}
 PROVIDER_KEY=${TEAMD_PROVIDER_API_KEY:-}
@@ -80,7 +94,7 @@ Environment overrides:
   TEAMD_TELEGRAM_BOT_TOKEN       Telegram bot token.
   TEAMD_TELEGRAM_MODE            Telegram runtime mode: polling or webhook, default: $TELEGRAM_MODE.
   TEAMD_NATS_URL                 NATS JetStream URL for event runtime, default: $NATS_URL.
-  TEAMD_PROVIDER_API_KEY         Z.ai/API provider key.
+  TEAMD_PROVIDER_API_KEY         LLM provider key.
   TEAMD_PROVIDER_KIND            Provider kind, default: $PROVIDER_KIND.
   TEAMD_PROVIDER_API_BASE        Provider API base, default: $PROVIDER_API_BASE.
   TEAMD_PROVIDER_MODEL           Provider model, default: $PROVIDER_MODEL.

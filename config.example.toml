@@ -70,11 +70,16 @@ kind = "openai_responses"
 # kind = "zai_chat_completions"
 # api_base = "https://api.z.ai/api/coding/paas/v4"
 # default_model = "glm-5-turbo"
+#
+# Kimi Code example:
+# kind = "kimi_anthropic_messages"
+# api_base = "https://api.kimi.com/coding"
+# default_model = "kimi-for-coding"
 connect_timeout_seconds = 15
 # request_timeout_seconds = 3600
 stream_idle_timeout_seconds = 1200
 max_tool_rounds = 24
-# max_output_tokens = 8192
+# max_output_tokens = 32768
 
 [permissions]
 mode = "default"

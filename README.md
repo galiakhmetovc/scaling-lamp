@@ -37,7 +37,7 @@ cargo run -p agentd -- tui
 ./scripts/deploy-teamd.sh
 ```
 
-Он проверит native build dependencies, `cargo`, `rustc` и PostgreSQL; при необходимости поставит системные build-пакеты, local PostgreSQL и stable Rust через `rustup`; интерактивно спросит Telegram bot token и Z.ai/API key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
+Он проверит native build dependencies, `cargo`, `rustc` и PostgreSQL; при необходимости поставит системные build-пакеты, local PostgreSQL и stable Rust через `rustup`; интерактивно спросит Telegram bot token и LLM provider key, соберёт release binary, установит `agentd` в `/opt/teamd/bin`, добавит `/usr/local/bin/agentd`, установит `/usr/local/bin/teamdctl`, создаст `/etc/teamd/config.toml`, `/etc/teamd/teamd.env` и systemd services `teamd-daemon.service`/`teamd-telegram.service`.
 
 Если сервер уже установлен и нужно только обновить бинарь без сборки на production host:
 

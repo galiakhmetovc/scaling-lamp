@@ -104,6 +104,161 @@ fn build_driver_uses_explicit_zai_selection() {
 }
 
 #[test]
+fn build_driver_uses_explicit_kimi_selection() {
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::KimiAnthropicMessages,
+        api_base: Some("https://api.kimi.com/coding".to_string()),
+        api_key: Some("test-key".to_string()),
+        default_model: Some("kimi-for-coding".to_string()),
+        ..ConfiguredProvider::default()
+    })
+    .expect("build kimi driver");
+
+    assert_eq!(driver.descriptor().name, "kimi-anthropic-messages");
+    assert_eq!(driver.descriptor().model_family, "kimi");
+    assert_eq!(
+        driver.descriptor().default_model.as_deref(),
+        Some("kimi-for-coding")
+    );
+}
+
+#[test]
+fn kimi_complete_posts_anthropic_messages_payload_and_extracts_output_text() {
+    let (api_base, requests, handle) = spawn_json_server(
+        r#"{
+                "id":"msg-kimi-123",
+                "model":"kimi-for-coding",
+                "content":[
+                    {
+                        "type":"text",
+                        "text":"hello from kimi"
+                    }
+                ],
+                "stop_reason":"end_turn",
+                "usage":{"input_tokens":21,"output_tokens":9}
+            }"#,
+    );
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::KimiAnthropicMessages,
+        api_base: Some(api_base),
+        api_key: Some("kimi-key".to_string()),
+        default_model: Some("kimi-for-coding".to_string()),
+        ..ConfiguredProvider::default()
+    })
+    .expect("build kimi driver");
+    let request = ProviderRequest {
+        model: None,
+        instructions: Some("Be brief".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "Say hi")],
+        think_level: None,
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: Vec::new(),
+        tool_outputs: Vec::new(),
+        max_output_tokens: Some(32768),
+        stream: ProviderStreamMode::Disabled,
+    };
+
+    let response = driver.complete(&request).expect("complete");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert_eq!(response.response_id, "msg-kimi-123");
+    assert_eq!(response.model, "kimi-for-coding");
+    assert_eq!(response.output_text, "hello from kimi");
+    assert_eq!(response.finish_reason, FinishReason::Completed);
+    assert_eq!(response.usage.expect("usage").total_tokens, 30);
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("/v1/messages"));
+    assert!(normalized_request.contains("x-api-key: kimi-key"));
+    assert!(normalized_request.contains("anthropic-version: 2023-06-01"));
+    assert!(normalized_request.contains("\"model\":\"kimi-for-coding\""));
+    assert!(normalized_request.contains("\"system\":\"be brief\""));
+    assert!(normalized_request.contains("\"type\":\"text\""));
+    assert!(normalized_request.contains("\"max_tokens\":32768"));
+    assert!(normalized_request.contains("\"stream\":false"));
+    assert!(!normalized_request.contains("\"thinking\""));
+    assert!(!normalized_request.contains("\"tool_stream\""));
+}
+
+#[test]
+fn kimi_complete_accepts_anthropic_tool_use_only_responses() {
+    let (api_base, requests, handle) = spawn_json_server(
+        r#"{
+                "id":"msg-kimi-tool-123",
+                "model":"kimi-for-coding",
+                "content":[
+                    {
+                        "type":"tool_use",
+                        "id":"toolu_web_fetch",
+                        "name":"web_fetch",
+                        "input":{"url":"https://example.com"}
+                    }
+                ],
+                "stop_reason":"tool_use",
+                "usage":{"input_tokens":31,"output_tokens":11}
+            }"#,
+    );
+    let driver = build_driver(&ConfiguredProvider {
+        kind: ProviderKind::KimiAnthropicMessages,
+        api_base: Some(api_base),
+        api_key: Some("kimi-key".to_string()),
+        default_model: Some("kimi-for-coding".to_string()),
+        ..ConfiguredProvider::default()
+    })
+    .expect("build kimi driver");
+    let request = ProviderRequest {
+        model: None,
+        instructions: Some("Use tools when needed".to_string()),
+        messages: vec![ProviderMessage::new(MessageRole::User, "Fetch the doc")],
+        think_level: None,
+        previous_response_id: None,
+        continuation_messages: Vec::new(),
+        tools: vec![ProviderToolDefinition {
+            name: "web_fetch".to_string(),
+            description: "Fetch a URL".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string" }
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            }),
+        }],
+        tool_outputs: Vec::new(),
+        max_output_tokens: Some(64),
+        stream: ProviderStreamMode::Disabled,
+    };
+
+    let response = driver
+        .complete(&request)
+        .expect("kimi tool-use response should be accepted");
+    let raw_request = requests.recv().expect("raw request");
+    handle.join().expect("join server");
+
+    assert_eq!(response.response_id, "msg-kimi-tool-123");
+    assert_eq!(response.output_text, "");
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].call_id, "toolu_web_fetch");
+    assert_eq!(response.tool_calls[0].name, "web_fetch");
+    assert_eq!(
+        response.tool_calls[0].arguments,
+        r#"{"url":"https://example.com"}"#
+    );
+    assert_eq!(response.finish_reason, FinishReason::Incomplete);
+    assert_eq!(response.usage.expect("usage").total_tokens, 42);
+
+    let normalized_request = raw_request.to_ascii_lowercase();
+    assert!(normalized_request.contains("/v1/messages"));
+    assert!(normalized_request.contains("\"name\":\"web_fetch\""));
+    assert!(normalized_request.contains("\"input_schema\""));
+    assert!(normalized_request.contains("\"max_tokens\":64"));
+    assert!(!normalized_request.contains("\"tool_choice\""));
+}
+
+#[test]
 fn zai_complete_posts_chat_completions_payload_and_extracts_output_text() {
     let (api_base, requests, handle) = spawn_json_server(
         r#"{
